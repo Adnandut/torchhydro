@@ -149,14 +149,19 @@ def fl_sample_basin(dataset: BaseDataset):
     """
     lookup_table = dataset.lookup_table
     basins = dataset.basins
-    # one basin is one user
-    num_users = len(basins)
-    # set group for basins
-    basin_groups = defaultdict(list)
-    for idx, (basin, date) in lookup_table.items():
-        basin_groups[basin].append(idx)
 
-    # one user is one basin
+    # Initialize basin_groups to map each basin to a list of indices
+    basin_groups = defaultdict(list)
+
+    # Populate basin_groups with indices for each basin
+    for idx, (basin_index, date) in lookup_table.items():
+        actual_basin = basins[basin_index]
+        basin_groups[actual_basin].append((actual_basin,date))
+
+    #number of users corredponds to the number of basins
+    num_users = len(basins)
+    # group basins by user
+
     user_basins = defaultdict(list)
     for i, basin in enumerate(basins):
         user_id = i % num_users
@@ -164,11 +169,12 @@ def fl_sample_basin(dataset: BaseDataset):
 
     # a lookup_table subset for each user
     user_lookup_tables = {}
-    for user_id, basins in user_basins.items():
+    for user_id, assigned_basins in user_basins.items():
         user_lookup_table = {}
-        for basin in basins:
-            for idx in basin_groups[basin]:
-                user_lookup_table[idx] = lookup_table[idx]
+        for basin in assigned_basins:
+            # Iterate over the entries in basin_groups for the current basin
+            for idx, entry in enumerate(basin_groups[basin], start=1):
+                user_lookup_table[idx] = entry
         user_lookup_tables[user_id] = user_lookup_table
 
     return user_lookup_tables
