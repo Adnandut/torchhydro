@@ -24,7 +24,7 @@ for logger_name in logging.root.manager.loggerDict:
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
 warnings.filterwarnings("ignore")
-show = pd.read_csv("data/basin_id(498+41).csv", dtype={"id": str})
+show = pd.read_csv("D:/torchhydro/data/basin_id(498+41).csv", dtype={"id": str})
 gage_id = show["id"].values.tolist()
 
 

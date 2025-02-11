@@ -22,7 +22,7 @@ for logger_name in logging.root.manager.loggerDict:
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
 
-show = pd.read_csv("data/basin_id(498+24).csv", dtype={"id": str})
+show = pd.read_csv("d:/torchhydro/data/basin_id(498+24).csv", dtype={"id": str})
 gage_id = show["id"].values.tolist()
 
 
@@ -121,7 +121,6 @@ def create_config():
     update_cfg(config_data, args)
 
     return config_data
-
 
 if __name__ == "__main__":
     main()

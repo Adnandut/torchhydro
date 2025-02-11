@@ -10,9 +10,12 @@ Copyright (c) 2023-2024 Wenyu Ouyang. All rights reserved.
 
 import os
 
+import torch
+
 from torchhydro import SETTING
 from torchhydro.configs.config import cmd, default_config_file, update_cfg
 from torchhydro.trainers.trainer import train_and_evaluate
+
 
 VAR_C_CHOSEN_FROM_CAMELS_US = [
     "elev_mean",
@@ -70,7 +73,7 @@ def run_normal_dl(
             ),
         },
         ctx=[0],
-        model_name="KuaiLSTM",
+        model_name="CpuLSTM",
         model_hyperparam={
             "n_input_features": len(var_c) + len(var_t),
             "n_output_features": 1,
@@ -102,7 +105,9 @@ def run_normal_dl(
     )
     update_cfg(config_data, args)
     train_and_evaluate(config_data)
+    
     print("All processes are finished!")
+ 
 
 
 # the gage_id.txt file is set by the user, it must be the format like:
@@ -111,4 +116,4 @@ def run_normal_dl(
 # 01022500
 # ......
 # Then it can be read by pd.read_csv(gage_id_file, dtype={0: str}).iloc[:, 0].values to get the gage_id list
-run_normal_dl(os.path.join("ndl", "explstm"), "xxx/xxx/gage_id.txt")
+run_normal_dl(os.path.join("ndl", "explstm"), "D:/torchhydro/data/gage_id.csv")
