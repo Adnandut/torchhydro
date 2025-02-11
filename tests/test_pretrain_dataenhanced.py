@@ -53,7 +53,7 @@ def config():
             "cnn_size": 120,
             "forecast_length": 24,
             "model_mode": "dual",
-            "prec_window": 1,
+            "hindcast_output_window": 1,
         },
         model_loader={"load_way": "best"},
         opt="Adam",
@@ -63,7 +63,7 @@ def config():
         },
         loss_func="RMSESum",
         batch_size=256,
-        forecast_history=336,
+        hindcast_length=336,
         forecast_length=24,
         train_period=[
             ("2015-06-01", "2015-09-30"),

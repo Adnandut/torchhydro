@@ -1,7 +1,7 @@
 """
 Author: Wenyu Ouyang
 Date: 2021-12-31 11:08:29
-LastEditTime: 2024-11-05 10:46:09
+LastEditTime: 2025-01-12 10:12:48
 LastEditors: Wenyu Ouyang
 Description: Config for hydroDL
 FilePath: \torchhydro\torchhydro\configs\config.py
@@ -11,6 +11,7 @@ Copyright (c) 2021-2022 Wenyu Ouyang. All rights reserved.
 import argparse
 import fnmatch
 import json
+import warnings
 import os
 
 import numpy as np
@@ -53,8 +54,8 @@ def default_config_file():
             "model_name": "LSTM",
             # the details of model parameters for the "model_name" model
             "model_hyperparam": {
-                # <- warmup -><- forecast_history -><- forecast_length ->
-                "forecast_history": 30,
+                # <- warmup -><- hindcast_length -><- forecast_length ->
+                "hindcast_length": 30,
                 "forecast_length": 30,
                 # the size of input (feature number)
                 "input_size": 24,
@@ -93,14 +94,13 @@ def default_config_file():
                 "source_names": ["CAMELS"],
                 "source_paths": ["../../example/camels_us"],
             },
-            "validation_path": None,
-            "test_path": None,
+            "case_dir": None,
             "batch_size": 100,
-            # we generally have three times: [warmup, forecast_history, forecast_length]
+            # we generally have three times: [warmup, hindcast_length, forecast_length]
             # For physics-based models, we need warmup; default is 0 as DL models generally don't need it
             "warmup_length": 0,
             # the length of the history data for forecasting
-            "forecast_history": 30,
+            "hindcast_length": 30,
             # the length of the forecast data
             "forecast_length": 1,
             # the min time step of the input data
@@ -204,6 +204,7 @@ def default_config_file():
                     "ssma",
                     "susma",
                 ],
+                # NOTE: pbm_norm is True means norm and denorm for differentiable models; if you use pure data-driven models, you should set it as False
                 "pbm_norm": False,
             },
             "stat_dict_file": None,
@@ -286,17 +287,18 @@ def default_config_file():
             "metrics": ["NSE", "RMSE", "R2", "KGE", "FHV", "FLV"],
             "fill_nan": "no",
             "explainer": None,
-            # rolling means testdataloader will sample data with overlap time
-            # rolling is False meaning each time has only one output for one basin one variable
-            # rolling is True and the time_window must be prec_window+horizon now!
-            # for example, data is |1|2|3|4|  time_window=2 then the samples are |1|2|, |2|3| and |3|4|
-            "rolling": False,
+            # rolling is 0 means decoder-only model's prediction -- each period has one prediction
+            # when rolling>0, such as 1, means perform forecasting each step after 1 period.
+            # For example, at 8:00am we perform one forecasting and our time-step is 3h,
+            # rolling=1 means 11:00, 14:00, 17:00 ..., we will perform forecasting
+            "rolling": 0,
             "calc_metrics": True,
         },
     }
 
 
 def cmd(
+    project_dir=None,
     sub=None,
     source_cfgs=None,
     scaler=None,
@@ -323,7 +325,9 @@ def cmd(
     opt_param=None,
     batch_size=None,
     warmup_length=0,
+    # forecast_history will be deprecated in the future
     forecast_history=None,
+    hindcast_length=None,
     forecast_length=None,
     train_mode=None,
     train_epoch=None,
@@ -370,6 +374,13 @@ def cmd(
     """input args from cmd"""
     parser = argparse.ArgumentParser(
         description="Train a Time-Series Deep Learning Model for Basins"
+    )
+    parser.add_argument(
+        "--project_dir",
+        dest="project_dir",
+        help="the project directory where you put your results in",
+        default=project_dir,
+        type=str,
     )
     parser.add_argument(
         "--sub", dest="sub", help="subset and sub experiment", default=sub, type=str
@@ -552,9 +563,16 @@ def cmd(
         type=int,
     )
     parser.add_argument(
+        "--hindcast_length",
+        dest="hindcast_length",
+        help="length of time sequence when training in encoder part, for decoder-only models, hindcast_length=0",
+        default=hindcast_length,
+        type=int,
+    )
+    parser.add_argument(
         "--forecast_history",
         dest="forecast_history",
-        help="length of time sequence when training in encoder part, for decoder-only models, forecast_history=0",
+        help="length of time sequence when training in encoder part, for decoder-only models, hindcast_length=0",
         default=forecast_history,
         type=int,
     )
@@ -735,9 +753,9 @@ def cmd(
     parser.add_argument(
         "--rolling",
         dest="rolling",
-        help="if False, evaluate 1-period output with a rolling window",
+        help="0 means no rolling; rolling>0, such as 1, means perform forecasting once after 1 period. For example, at 8:00am we perform one forecasting and our time-step is 3h, rolling=1 means 11:00, 14:00, 17:00 ..., we will perform forecasting",
         default=rolling,
-        type=bool,
+        type=int,
     )
     parser.add_argument(
         "--model_loader",
@@ -872,16 +890,16 @@ def update_cfg(cfg_file, new_args):
         in-place operation for cfg_file
     """
     print("update config file")
-    project_dir = os.getcwd()
+    if new_args.project_dir is not None:
+        project_dir = new_args.project_dir
+    else:
+        project_dir = os.getcwd()
     result_dir = os.path.join(project_dir, "results")
     if os.path.exists(result_dir) is False:
         os.makedirs(result_dir)
     if new_args.sub is not None:
         subset, subexp = new_args.sub.split(os.sep)
-        cfg_file["data_cfgs"]["validation_path"] = os.path.join(
-            project_dir, "results", subset, subexp
-        )
-        cfg_file["data_cfgs"]["test_path"] = os.path.join(result_dir, subset, subexp)
+        cfg_file["data_cfgs"]["case_dir"] = os.path.join(result_dir, subset, subexp)
     if new_args.source_cfgs is not None:
         cfg_file["data_cfgs"]["source_cfgs"] = new_args.source_cfgs
     if new_args.scaler is not None:
@@ -1020,10 +1038,12 @@ def update_cfg(cfg_file, new_args):
                 "forecast_length"
             ]
         # The following two configurations are for encoder-decoder models' seq2seqdataset
-        if "prec_window" in new_args.model_hyperparam.keys():
-            cfg_file["data_cfgs"]["prec_window"] = new_args.model_hyperparam[
-                "prec_window"
+        if "hindcast_output_window" in new_args.model_hyperparam.keys():
+            cfg_file["data_cfgs"]["hindcast_output_window"] = new_args.model_hyperparam[
+                "hindcast_output_window"
             ]
+        else:
+            cfg_file["data_cfgs"]["hindcast_output_window"] = 0
     if new_args.batch_size is not None:
         # raise AttributeError("Please set the batch_size!!!")
         batch_size = new_args.batch_size
@@ -1054,8 +1074,14 @@ def update_cfg(cfg_file, new_args):
             raise RuntimeError(
                 "Please set same warmup_length in model_cfgs and data_cfgs"
             )
-    if new_args.forecast_history is not None:
-        cfg_file["data_cfgs"]["forecast_history"] = new_args.forecast_history
+    if new_args.hindcast_length is not None:
+        cfg_file["data_cfgs"]["hindcast_length"] = new_args.hindcast_length
+    if new_args.hindcast_length is None and new_args.forecast_history is not None:
+        # forecast_history will be deprecated in the future
+        warnings.warn(
+            "forecast_history will be deprecated in the future, please use hindcast_length instead"
+        )
+        cfg_file["data_cfgs"]["hindcast_length"] = new_args.forecast_history
     if new_args.forecast_length is not None:
         cfg_file["data_cfgs"]["forecast_length"] = new_args.forecast_length
     if new_args.start_epoch > 1:
