@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import reduce
 from typing import Dict, Tuple
+import warnings
 
 import numpy as np
 import xarray as xr
@@ -567,7 +568,7 @@ class FedLearnHydro(DeepHydro):
             user_groups = fl_sample_basin(train_dataset)
         elif fl_hyperparam["fl_sample"] == "region":
             # Sample a region for a user
-            user_groups = fl_sample_region(train_dataset)
+            user_groups, self.num_regions = fl_sample_region(train_dataset)
         else:
             raise NotImplementedError("Sampling method not implemented.")
         self.user_groups = user_groups
@@ -605,38 +606,68 @@ class FedLearnHydro(DeepHydro):
         # Create a logger
         logger = TrainLogger(model_filepath, self.cfgs, opt)
 
-        # Set default periods if not provided
+       # Set periods if provided, otherwise issue a warning
         if t_range_train is None:
-            t_range_train = data_cfgs.get("t_range_train", [np.datetime64('1980-10-01'), np.datetime64('1995-10-01')])
-        if t_range_valid is None:
-            t_range_valid = data_cfgs.get("t_range_valid", [np.datetime64('1995-10-01'), np.datetime64('2000-10-01')])
-        if t_range_test is None:
-            t_range_test = data_cfgs.get("t_range_test", [np.datetime64('2000-10-01'), np.datetime64('2010-10-01')])
+            t_range_train = data_cfgs.get("t_range_train")
+            if t_range_train is None:
+                warnings.warn("Training period (t_range_train) is not provided. Training will proceed without a defined period.")
 
+        if t_range_valid is None:
+            t_range_valid = data_cfgs.get("t_range_valid")
+            if t_range_valid is None:
+                warnings.warn("Validation period (t_range_valid) is not provided. Validation will be skipped.")
+
+        if t_range_test is None:
+            t_range_test = data_cfgs.get("t_range_test")
+            if t_range_test is None:
+                warnings.warn("Test period (t_range_test) is not provided. Testing will be skipped.")
         # Total rounds in a FL system is max_epochs
         for epoch in tqdm(range(start_epoch, max_epochs + 1)):
             print(f"\n | Global Training Round : {epoch} |\n")
+            # print model parameters before training this epoch
+            print(f"Model wieghts before training epoch {epoch}:")
+            for name, param in global_model.named_parameters():
+                print(f"{name}: {param.data.view(-1)[:5]}")
             local_weights, local_losses = [], []
             m = max(int(fl_hyperparam["fl_frac"] * self.num_users), 1)
+           
             # Randomly select m users, they will be the clients in this round
-            idxs_users = np.random.choice(range(self.num_users), m, replace=False)
-
-            for idx in idxs_users:
+            
+            if fl_hyperparam["fl_sample"] == "basin":
+                   idx_users = np.random.choice(range(self.num_users), m, replace=False)
+            elif fl_hyperparam["fl_sample"] == "region":
+                   idx_users = np.random.choice(list(self.user_groups.keys()), m, replace=False)
+            self.idx_users = idx_users
+            for idx in idx_users:
                 print(f"Training user index: {idx}")
-                # Each user will be used to train the model locally
+                 # Each user will be used to train the model locally
                 user_cfgs = self._get_a_user_cfgs(idx, t_range_train, t_range_valid, t_range_test)
                 local_model = DeepHydro(user_cfgs, pre_model=copy.deepcopy(global_model))
+                #train local model
                 w, loss = local_model.model_train()
                 local_weights.append(copy.deepcopy(w))
                 local_losses.append(copy.deepcopy(loss))
+             # Check weight differences before aggregation
+            for i, weights in enumerate(local_weights):
+                for name, param in weights.items():
+                    print(f"Weight difference for user {i}, {name}: {(weights[name] - global_weights[name]).abs().sum()}")
 
-            # Update global weights
+
+            print(f"Before aggregation: {global_model.state_dict()}")
             global_weights = average_weights(local_weights)
             global_model.load_state_dict(global_weights)
-
+            print(f"After aggregation: {global_model.state_dict()}")    
+              # Print the aggregated weights
+            print(f"Aggregated Weights after Epoch {epoch + 1}:")
+            for name, param in global_model.named_parameters():
+                print(f"{name}: {param.data.view(-1)[:5]}")
+            # save model wieghts for comaprison
+            torch.save(global_model.state_dict(), f"epoch_{epoch}.pth")
+            # aggrerate training loss
+            avg_train_loss = np.mean(local_losses)
             # Log training metrics
             with logger.log_epoch_train(epoch) as train_logs:
-                total_loss, n_iter_ep = torch_single_train(
+                avg_train_loss, n_iter_ep = torch_single_train(
                     self.model,
                     opt,
                     criterion,
@@ -644,10 +675,10 @@ class FedLearnHydro(DeepHydro):
                     device=self.device,
                     which_first_tensor=training_cfgs["which_first_tensor"],
                 )
-                train_logs["train_loss"] = total_loss
+                train_logs["train_loss"] = avg_train_loss
                 train_logs["model"] = self.model
-                train_loss.append(total_loss)
-            # Log validation metrics
+                train_loss.append(avg_train_loss)
+                print(f"[DEBUG] Epoch {epoch}: Computed Training Loss = {avg_train_loss}")
             valid_loss = None
             valid_metrics = None
             if data_cfgs["t_range_valid"] is not None:
@@ -658,9 +689,10 @@ class FedLearnHydro(DeepHydro):
 
             # Step the scheduler
             self._scheduler_step(training_cfgs, scheduler, valid_loss)
+            print(f"[DEBUG] Logging Loss for Epoch {epoch}: {train_logs['train_loss']}")
 
             # Save session parameters
-            logger.save_session_param(epoch, total_loss, n_iter_ep, valid_loss, valid_metrics)
+            logger.save_session_param(epoch, avg_train_loss, n_iter_ep, valid_loss, valid_metrics)
 
             # Save the model and its parameters
             logger.save_model_and_params(self.model, epoch, self.cfgs)
@@ -669,15 +701,26 @@ class FedLearnHydro(DeepHydro):
             all_preds = []
             all_obss = []
             global_model.eval()
-            for c in range(self.num_users):
-                one_user_cfg = self._get_a_user_cfgs(c, t_range_train, t_range_valid, t_range_test)
-                local_model = DeepHydro(
-                    one_user_cfg,
-                    pre_model=global_model,
-                )
-                preds, obss = local_model.model_evaluate()
-                all_preds.append(preds['streamflow'].values)
-                all_obss.append(obss['streamflow'].values)
+            if fl_hyperparam["fl_sample"] == "basin":
+                for c in range(self.num_users):
+                    one_user_cfg = self._get_a_user_cfgs(c, t_range_train, t_range_valid, t_range_test)
+                    local_model = DeepHydro(
+                        one_user_cfg,
+                        pre_model=global_model,
+                    )
+                    preds, obss = local_model.model_evaluate()
+                    all_preds.append(preds['streamflow'].values)
+                    all_obss.append(obss['streamflow'].values)
+            elif fl_hyperparam["fl_sample"] == "region":
+                for c in list(self.user_groups.keys()):
+                    one_user_cfg = self._get_a_user_cfgs(c, t_range_train, t_range_valid, t_range_test)
+                    local_model = DeepHydro(
+                        one_user_cfg,
+                        pre_model=global_model,
+                    )
+                    preds, obss = local_model.model_evaluate()
+                    all_preds.append(preds['streamflow'].values)
+                    all_obss.append(obss['streamflow'].values)
            
            
             # Concatenate all predictions and observations
@@ -703,20 +746,36 @@ class FedLearnHydro(DeepHydro):
                 print(f"Training Loss : {avg_train_loss}")
                 print("Overall Accuracy: {:.2f}% \n".format(100 * overall_accuracy))
                 print("Overall MSE: {:.4f} \n".format(overall_mse))
+            # Print the weights of the global model
+            print(f"Global Model Weights after Epoch {epoch}:")
+            for name, param in global_model.named_parameters():
+                print(f"{name}: {param.data.view(-1)[:5]}")
         # Close the logger
         logger.tb.close()
+        # compare saved weights from consecutive epochs
+        if start_epoch < max_epochs:
+            state1 = torch.load(f"epoch_{start_epoch}.pth")
+            state2 = torch.load(f"epoch_{max_epochs}.pth")
+            print("weights comparison between epoch 1 and epoch 2")
+            for key in state1:
+                diff = state1[key] - state2[key].abs().sum()
+                print(f"{key}: Difference {diff}")
 
 
     def _get_a_user_cfgs(self, idx, t_range_train, t_range_valid, t_range_test):
         """Get a user's configs for local training"""
         user = self.user_groups[idx]
 
-        # Update data_cfgs
         basin_dates = defaultdict(list)
-        for _, (basin, time) in user.items():
-            time_datetime64 = np.datetime64(time, 'D')
-            basin_dates[basin].append(time_datetime64)
-
+        for user_key, value in user.items():
+            if isinstance(value, list):  # If the user has multiple basins (one region)
+                for basin, time in value:  # Unpack each (basin_id, date) tuple
+                    time_datetime64 = np.datetime64(time, 'D')  # Convert time to datetime64
+                    basin_dates[basin].append(time_datetime64)  # Store time for each basin
+            else:  # If the user has a single basin (one basin per user)
+                basin, time = value  # Unpack the single (basin_id, date) tuple
+                time_datetime64 = np.datetime64(time, 'D')  # Convert time to datetime64
+                basin_dates[basin].append(time_datetime64)  # Store time for the basin
         basins = []
         date_ranges = {}
         for basin, times in basin_dates.items():

@@ -63,7 +63,7 @@ def default_config_file():
                 "hidden_size": 20,
                 "num_layers": 1,
                 "bias": True,
-                "batch_size": 100,
+                "batch_size": 32,
                 "dropout": 0.2,
             },
             "weight_path": None,
@@ -71,7 +71,7 @@ def default_config_file():
             # federated learning parameters
             "fl_hyperparam": {
                 # sampling for federated learning
-                "fl_sample": "basin",
+                "fl_sample": "region",
                 # number of users for federated learning
                 # TODO: we don't use this parameter now, but we may use it in the future
                 "fl_num_users": 10,
@@ -904,7 +904,7 @@ def update_cfg(cfg_file, new_args):
     if new_args.fl_local_bs is not None:
         cfg_file["model_cfgs"]["fl_hyperparam"]["fl_local_bs"] = new_args.fl_local_bs
     if new_args.fl_frac is not None:
-        cfg_file["model_cfgs1"]["fl_hyperparam"]["fl_frac"] = new_args.fl_frac
+        cfg_file["model_cfgs"]["fl_hyperparam"]["fl_frac"] = new_args.fl_frac
     if new_args.master_addr is not None:
         cfg_file["training_cfgs"]["master_addr"] = new_args.master_addr
     if new_args.port is not None:

@@ -182,35 +182,123 @@ def fl_sample_basin(dataset: BaseDataset):
 
 def fl_sample_region(dataset: BaseDataset):
     """
-    Sample one region data as a client from a dataset for federated learning
+    Assigns each region as a federated learning client, returning only (basin, date) pairs.
 
-    TODO: not finished
+    Parameters
+    ----------
+    dataset : Dataset
+        The dataset containing a lookup table mapping indices to (region, basin, date).
 
+    Returns
+    -------
+    user_lookup_tables : dict
+        A dictionary where:
+        - Keys are user IDs (clients).
+        - Values are lookup tables mapping indices to (basin, date) tuples.
     """
-    num_users = 10
-    num_shards, num_imgs = 200, 250
-    idx_shard = list(range(num_shards))
-    dict_users = {i: np.array([]) for i in range(num_users)}
-    idxs = np.arange(num_shards * num_imgs)
-    # labels = dataset.train_labels.numpy()
-    labels = np.array(dataset.train_labels)
+    lookup_table = dataset.lookup_table  # {index -> (region_index, basin_index, date)}
+    basins = dataset.basins  # List of basin names
+    import pandas as pd
 
-    # sort labels
-    idxs_labels = np.vstack((idxs, labels))
-    idxs_labels = idxs_labels[:, idxs_labels[1, :].argsort()]
-    idxs = idxs_labels[0, :]
+    # Define the region mapping
+    region_mapping = {
+        "01": "Region 1",
+        "02": "Region 2",
+        "03": "Region 3",
+        "04": "Region 4",
+        "05": "Region 5",
+        "06": "Region 6",
+        "07": "Region 7",
+        "08": "Region 8",
+        "09": "Region 9",
+        "10": "Region 10",
+        "11": "Region 11",
+        "12": "Region 12",
+        "13": "Region 13",
+        "14": "Region 14",
+        "15": "Region 15",
+        "16": "Region 16",
+        "17": "Region 17",
+        "18": "Region 18",
+        # Add all other huc_id or basin-to-region mappings here
+    }
 
-    # divide and assign
-    for i in range(num_users):
-        rand_set = set(np.random.choice(idx_shard, 2, replace=False))
-        idx_shard = list(set(idx_shard) - rand_set)
-        for rand in rand_set:
-            dict_users[i] = np.concatenate(
-                (dict_users[i], idxs[rand * num_imgs : (rand + 1) * num_imgs]), axis=0
-            )
-    return dict_users
+    # Read the file that contains huc_id and basin info
+    def read_and_classify_basins(file_path):
+    # Read the file into a pandas DataFrame
+        df = pd.read_csv(file_path, dtype={'HUC_02': str, 'GAGE_ID': str})  # Ensure 'HUC_02' and 'GAGE_ID' are strings
+        
+        # Dictionary to store basins by region
+        region_basins = {region: [] for region in region_mapping.values()}
+        
+        # Iterate over the rows and classify basins based on the region
+        for index, row in df.iterrows():
+            # Convert HUC_02 to string and pad with leading zero if necessary
+            huc_id = str(row['HUC_02']).zfill(2)  # Ensures HUC_ID is treated as a string
+            basin = str(row['GAGE_ID']).zfill(8)  # Basin ID as a string, leading zeros preserved
+            if huc_id in region_mapping:
+                region = region_mapping[huc_id]
+                region_basins[region].append(basin)
+            else:
+                print(f"Warning: HUC_ID {huc_id} not found in region_mapping")
 
+        return region_basins
+    # Example usage
+    file_path = "D:/data/waterism/datasets-origin/camels/camels_us/basin_timeseries_v1p2_metForcing_obsFlow/basin_dataset_public_v1p2/basin_metadata/regions.csv"  # Replace with your file path
+    region_basins = read_and_classify_basins(file_path)
 
+    class Dataset:
+        def __init__(self):
+            self.regions = {}
+
+    # Create a Dataset object and store the classified basins by region
+    dataset = Dataset()
+    dataset.regions = region_basins
+
+    # Number of users corresponds to the number of regions
+    # num_users = len(region_basins)
+    
+     # Initialize basin_groups to map each basin to a list of indices
+    basin_groups = defaultdict(list)
+
+    # Populate basin_groups with indices for each basin
+    for idx, (basin_index, date) in lookup_table.items():
+        actual_basin = basins[basin_index]
+        basin_groups[actual_basin].append((actual_basin, date))
+
+    # Create lookup tables for each region (user)
+    user_lookup_tables = defaultdict(dict)
+    user_id = 0  # This will be used to assign users (regions)
+ # Iterate through the regions and assign basins to the appropriate region (user)
+    for region, region_basin_list in region_basins.items():
+        user_lookup_table = defaultdict(list)  # Use list to store multiple (basin, date) pairs for each basin
+
+        # Track if any basin from user-provided basins belongs to the current region
+        region_has_basins = False
+
+        # Check for each basin in user-provided basins
+        for basin in basins:
+            # Ensure the basin is properly formatted (leading zeros if needed)
+            basin = str(basin).zfill(8)  # Ensure basin is treated as string with leading zeros
+
+            # Check if the basin exists in the basin_groups
+            if basin in basin_groups:
+                # Check if the basin belongs to the current region (from region_basin_list)
+                if basin in region_basin_list:
+                    region_has_basins = True  # Mark that this region has basins
+
+                    # Add all the (basin, date) pairs to the user_lookup_table for this region
+                    user_lookup_table[basin].extend(basin_groups[basin])  # Extend to store all (basin, date)
+
+        # Only add the user_lookup_table if the region has basins
+        if region_has_basins:
+            region_number = int(region.split()[-1])  # This will extract the number from 'Region X'
+            user_id = region_number - 1  # Since region is 1-based, user_id is region-1
+
+            user_lookup_tables[user_id] = dict(user_lookup_table)  # Convert defaultdict to regular dict
+    # Calculate the number of users (regions)
+    region_users = list(user_lookup_tables.keys())
+    return user_lookup_tables, region_users
 data_sampler_dict = {
     "KuaiSampler": KuaiSampler,
     "BasinBatchSampler": BasinBatchSampler,
