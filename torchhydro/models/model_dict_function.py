@@ -1,10 +1,10 @@
 """
 Author: Wenyu Ouyang
 Date: 2021-12-31 11:08:29
-LastEditTime: 2024-10-29 11:43:09
+LastEditTime: 2025-01-25 09:33:46
 LastEditors: Wenyu Ouyang
 Description: Dicts including models (which are seq-first), losses, and optims
-FilePath: \torchhydro\torchhydro\models\model_dict_function.py
+FilePath: /torchhydro/torchhydro/models/model_dict_function.py
 Copyright (c) 2021-2022 Wenyu Ouyang. All rights reserved.
 """
 
@@ -18,7 +18,14 @@ from torchhydro.models.cudnnlstm import (
     CpuLstmModel,
 )
 
-from torchhydro.models.simple_lstm import SimpleLSTMForecast
+from torchhydro.models.simple_lstm import (
+    LinearMultiLayerLSTMModel,
+    LinearSimpleLSTMModel,
+    MultiLayerLSTM,
+    SimpleLSTM,
+    SimpleLSTMForecast,
+)
+from torchhydro.models.seqforecast import SequentialForecastLSTM
 from torchhydro.models.seq2seq import (
     GeneralSeq2Seq,
     DataEnhancedModel,
@@ -60,6 +67,7 @@ pytorch_model_dict = {
     "SPPLSTM": SPP_LSTM_Model,
     "SimpleLSTMForecast": SimpleLSTMForecast,
     "SPPLSTM2": SPP_LSTM_Model_2,
+    "SeqForecastLSTM": SequentialForecastLSTM,
     "Seq2Seq": GeneralSeq2Seq,
     "DataEnhanced": DataEnhancedModel,
     "DataFusion": DataFusionModel,
@@ -69,6 +77,10 @@ pytorch_model_dict = {
     "DplAnnHbv": DplAnnHbv,
     "DplLstmGr4j": DplLstmGr4j,
     "DplAnnGr4j": DplAnnGr4j,
+    "SimpleLSTM": SimpleLSTM,
+    "LinearSimpleLSTMModel": LinearSimpleLSTMModel,
+    "MultiLayerLSTM": MultiLayerLSTM,
+    "LinearMultiLayerLSTMModel": LinearMultiLayerLSTMModel,
 }
 
 pytorch_criterion_dict = {

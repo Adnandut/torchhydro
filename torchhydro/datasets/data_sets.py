@@ -1,7 +1,7 @@
 """
 Author: Wenyu Ouyang
 Date: 2024-04-08 18:16:53
-LastEditTime: 2024-11-06 08:11:13
+LastEditTime: 2025-01-12 15:16:28
 LastEditors: Wenyu Ouyang
 Description: A pytorch dataset class; references to https://github.com/neuralhydrology/neuralhydrology
 FilePath: \torchhydro\torchhydro\datasets\data_sets.py
@@ -26,10 +26,10 @@ from torchhydro.datasets.data_scalers import ScalerHub
 from torchhydro.datasets.data_sources import data_sources_dict
 
 from torchhydro.datasets.data_utils import (
+    set_unit_to_var,
     warn_if_nan,
     wrap_t_s_dict,
 )
-from hydrodatasource.reader.data_source import SelfMadeHydroDataset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def _fill_gaps_da(da: xr.DataArray, fill_nan: Optional[str] = None) -> xr.DataAr
             mean_val = var_data.mean(
                 dim="basin"
             )  # calculate the mean across all basins
-            if warn_if_nan(mean_val):
+            if warn_if_nan(mean_val, nan_mode="all"):
                 # when all value are NaN, mean_val will be NaN, we set mean_val to -1
                 mean_val = -1
             filled_data = var_data.fillna(
@@ -243,7 +243,7 @@ class BaseDataset(Dataset):
     def _pre_load_data(self):
         self.train_mode = self.is_tra_val_te == "train"
         self.t_s_dict = wrap_t_s_dict(self.data_cfgs, self.is_tra_val_te)
-        self.rho = self.data_cfgs["forecast_history"]
+        self.rho = self.data_cfgs["hindcast_length"]
         self.warmup_length = self.data_cfgs["warmup_length"]
         self.horizon = self.data_cfgs["forecast_length"]
 
@@ -280,6 +280,49 @@ class BaseDataset(Dataset):
         self.target_scaler = scaler_hub.target_scaler
         return scaler_hub.x, scaler_hub.y, scaler_hub.c
 
+    def denormalize(self, norm_data, rolling=0):
+        """Denormalize the norm_data
+
+        Parameters
+        ----------
+        norm_data : np.ndarray
+            batch-first data
+        rolling: int
+            default 0, if rolling is used, perform forecasting using rolling window size
+
+        Returns
+        -------
+        xr.Dataset
+            denormlized data
+        """
+        target_scaler = self.target_scaler
+        target_data = target_scaler.data_target
+        # the units are dimensionless for pure DL models
+        units = {k: "dimensionless" for k in target_data.attrs["units"].keys()}
+        if target_scaler.pbm_norm:
+            units = {**units, **target_data.attrs["units"]}
+        if rolling > 0:
+            hindcast_output_window = target_scaler.data_cfgs["hindcast_output_window"]
+            rho = target_scaler.data_cfgs["hindcast_length"]
+            # TODO: -1 because seq2seqdataset has one more time, hence we need to cut it, as rolling will be refactored, we will modify it later
+            selected_time_points = target_data.coords["time"][
+                rho - hindcast_output_window : -1
+            ]
+        else:
+            warmup_length = self.warmup_length
+            selected_time_points = target_data.coords["time"][warmup_length:]
+
+        selected_data = target_data.sel(time=selected_time_points)
+        denorm_xr_ds = target_scaler.inverse_transform(
+            xr.DataArray(
+                norm_data.transpose(2, 0, 1),
+                dims=selected_data.dims,
+                coords=selected_data.coords,
+                attrs={"units": units},
+            )
+        )
+        return set_unit_to_var(denorm_xr_ds)
+
     def _to_dataarray_with_unit(self, data_forcing_ds, data_output_ds, data_attr_ds):
         # trans to dataarray to better use xbatch
         if data_output_ds is not None:
@@ -302,10 +345,10 @@ class BaseDataset(Dataset):
 
         Parameters
         ----------
-        data_forcing_ds : _type_
-            _description_
-        data_output_ds : _type_
-            _description_
+        data_forcing_ds : xr.Dataset
+            the forcing data
+        data_output_ds : xr.Dataset
+            outputs including streamflow data
         """
 
         def standardize_unit(unit):
@@ -403,19 +446,33 @@ class BaseDataset(Dataset):
         x_rm_nan = data_cfgs["relevant_rm_nan"]
         c_rm_nan = data_cfgs["constant_rm_nan"]
         if x_rm_nan:
-            # As input, we cannot have NaN values
-            _fill_gaps_da(x, fill_nan="interpolate")
-            warn_if_nan(x)
+            x = self._kill_1type_nan(
+                x,
+                "interpolate",
+                "original forcing data",
+                "nan_filled forcing data",
+            )
         if y_rm_nan:
-            _fill_gaps_da(y, fill_nan="interpolate")
-            warn_if_nan(y)
+            y = self._kill_1type_nan(
+                y, "interpolate", "original output data", "nan_filled output data"
+            )
         if c_rm_nan:
-            _fill_gaps_da(c, fill_nan="mean")
-            warn_if_nan(c)
-        warn_if_nan(x, nan_mode="all")
-        warn_if_nan(y, nan_mode="all")
-        warn_if_nan(c, nan_mode="all")
+            c = self._kill_1type_nan(
+                c, "mean", "original attribute data", "nan_filled attribute data"
+            )
+        warn_if_nan(x, nan_mode="any", data_name="nan_filled forcing data")
+        warn_if_nan(y, nan_mode="all", data_name="output data")
+        warn_if_nan(c, nan_mode="any", data_name="nan_filled attribute data")
         return x, y, c
+
+    def _kill_1type_nan(self, the_data, fill_nan, data_name_before, data_name_after):
+        is_any_nan = warn_if_nan(the_data, data_name=data_name_before)
+        if not is_any_nan:
+            return the_data
+        # As input, we cannot have NaN values
+        the_filled_data = _fill_gaps_da(the_data, fill_nan=fill_nan)
+        warn_if_nan(the_filled_data, data_name=data_name_after)
+        return the_filled_data
 
     def _create_lookup_table(self):
         lookup = []
@@ -677,7 +734,7 @@ class Seq2SeqDataset(BaseDataset):
         basin, time = self.lookup_table[item]
         rho = self.rho
         horizon = self.horizon
-        prec = self.data_cfgs.get("prec_window", 0)
+        hindcast_output_window = self.data_cfgs.get("hindcast_output_window", 0)
         # p cover all encoder-decoder periods; +1 means the period while +0 means start of the current period
         p = self.x[basin, time + 1 : time + rho + horizon + 1, 0].reshape(-1, 1)
         # s only cover encoder periods
@@ -697,8 +754,10 @@ class Seq2SeqDataset(BaseDataset):
             print(f"Error in np.concatenate: {e}")
             print(f"p[rho:].shape: {p[rho:].shape}, c[rho:].shape: {c[rho:].shape}")
             raise
-        # y cover specified encoder size (prec_window) and all decoder periods
-        y = self.y[basin, time + rho - prec + 1 : time + rho + horizon + 1, :]
+        # y cover specified encoder size (hindcast_output_window) and all decoder periods
+        y = self.y[
+            basin, time + rho - hindcast_output_window + 1 : time + rho + horizon + 1, :
+        ]
 
         if self.is_tra_val_te == "train":
             return [
@@ -709,6 +768,28 @@ class Seq2SeqDataset(BaseDataset):
         return [
             torch.from_numpy(xc).float(),
             torch.from_numpy(xh).float(),
+        ], torch.from_numpy(y).float()
+
+
+class SeqForecastDataset(Seq2SeqDataset):
+    def __init__(self, data_cfgs: dict, is_tra_val_te: str):
+        super(SeqForecastDataset, self).__init__(data_cfgs, is_tra_val_te)
+
+    def __getitem__(self, item: int):
+        basin, time = self.lookup_table[item]
+        rho = self.rho  # forecast history
+        horizon = self.horizon  # forecast length
+        hindcast_output_window = self.data_cfgs.get("hindcast_output_window", 0)
+        xe = self.x[basin, time : time + rho, :]
+        xd = self.x[basin, time + rho : time + rho + horizon, :]
+        c = self.c[basin, :]
+        # y cover specified all decoder periods
+        y = self.y[basin, time + rho - hindcast_output_window : time + rho + horizon, :]
+
+        return [
+            torch.from_numpy(xe).float(),
+            torch.from_numpy(xd).float(),
+            torch.from_numpy(c).float(),
         ], torch.from_numpy(y).float()
 
 

@@ -1,7 +1,7 @@
 """
 Author: Wenyu Ouyang
 Date: 2024-04-08 18:17:44
-LastEditTime: 2024-11-05 09:21:24
+LastEditTime: 2025-01-12 15:23:28
 LastEditors: Wenyu Ouyang
 Description: normalize the data
 FilePath: \torchhydro\torchhydro\datasets\data_scalers.py
@@ -117,11 +117,11 @@ class ScalerHub(object):
                     ).shape
                     data_tmp = data_tmp.to_numpy().reshape(-1, num_features)
                     save_file = os.path.join(
-                        data_cfgs["test_path"], f"{norm_keys[i]}_scaler.pkl"
+                        data_cfgs["case_dir"], f"{norm_keys[i]}_scaler.pkl"
                     )
                     if is_tra_val_te == "train" and data_cfgs["stat_dict_file"] is None:
                         data_norm = scaler.fit_transform(data_tmp)
-                        # Save scaler in test_path for valid/test
+                        # Save scaler in case_dir for valid/test
                         with open(save_file, "wb") as outfile:
                             pkl.dump(scaler, outfile)
                     else:
@@ -140,11 +140,11 @@ class ScalerHub(object):
                 else:
                     # for attributes
                     save_file = os.path.join(
-                        data_cfgs["test_path"], f"{norm_keys[i]}_scaler.pkl"
+                        data_cfgs["case_dir"], f"{norm_keys[i]}_scaler.pkl"
                     )
                     if is_tra_val_te == "train" and data_cfgs["stat_dict_file"] is None:
                         data_norm = scaler.fit_transform(data_tmp)
-                        # Save scaler in test_path for valid/test
+                        # Save scaler in case_dir for valid/test
                         with open(save_file, "wb") as outfile:
                             pkl.dump(scaler, outfile)
                     else:
@@ -263,8 +263,8 @@ class DapengScaler(object):
         self.log_norm_cols = gamma_norm_cols + prcp_norm_cols
         self.pbm_norm = pbm_norm
         self.data_source = data_source
-        # save stat_dict of training period in test_path for valid/test
-        stat_file = os.path.join(data_cfgs["test_path"], "dapengscaler_stat.json")
+        # save stat_dict of training period in case_dir for valid/test
+        stat_file = os.path.join(data_cfgs["case_dir"], "dapengscaler_stat.json")
         # for testing sometimes such as pub cases, we need stat_dict_file from trained dataset
         if is_tra_val_te == "train" and data_cfgs["stat_dict_file"] is None:
             self.stat_dict = self.cal_stat_all()
@@ -320,7 +320,7 @@ class DapengScaler(object):
         stat_dict = self.stat_dict
         target_cols = self.data_cfgs["target_cols"]
         if self.pbm_norm:
-            # for pbm's output, its unit is mm/day, so we don't need to recover its unit
+            # for (differentiable models) pbm's output, its unit is mm/day, so we don't need to recover its unit
             pred = target_values
         else:
             pred = _trans_norm(

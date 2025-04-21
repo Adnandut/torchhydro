@@ -1,76 +1,58 @@
 """
 Author: Wenyu Ouyang
-Date: 2023-07-25 16:47:19
-LastEditTime: 2024-05-27 16:22:15
+Date: 2023-09-24 14:28:48
+LastEditTime: 2023-12-18 09:11:55
 LastEditors: Wenyu Ouyang
-Description: Test a full training and evaluating process
-FilePath: \torchhydro\tests\test_caravan_train.py
+Description: A test for federated learning
+FilePath: \torchhydro\tests\test_federated_learning.py
 Copyright (c) 2023-2024 Wenyu Ouyang. All rights reserved.
 """
 
 import os
 import pytest
+
 from torchhydro import SETTING
 from torchhydro.configs.config import cmd, default_config_file, update_cfg
 from torchhydro.trainers.trainer import train_and_evaluate
 
 
 @pytest.fixture()
-def var_c():
-    return ["area", "p_mean", "pet_mean", "aridity", "frac_snow", "moisture_index"]
-
-
-@pytest.fixture()
-def var_t():
-    return [
-        "surface_net_solar_radiation_mean",
-        "total_precipitation_sum",
-        "potential_evaporation_sum",
-        "temperature_2m_max",
-        "temperature_2m_min",
-        "surface_pressure_mean",
-    ]
-
-
-@pytest.fixture()
-def config(var_c, var_t):
-    project_name = "test_caravan/exp5"
+def config():
+    project_name = "test_camels/exp3"
     config_data = default_config_file()
     args = cmd(
         sub=project_name,
         source_cfgs={
-            "source_name": "Caravan",
+            "source_name": "camels_us",
             "source_path": os.path.join(
-                SETTING["local_data_path"]["datasets-origin"], "caravan"
+                SETTING["local_data_path"]["datasets-origin"], "camels", "camels_us"
             ),
-            "other_settings": {
-                "source_region": "Global",
-            },
         },
         ctx=[-1],
+        model_type="FedLearn",
         model_name="CpuLSTM",
         model_hyperparam={
-            "n_input_features": len(var_t) + len(var_c),
+            "n_input_features": 23,
             "n_output_features": 1,
             "n_hidden_states": 256,
         },
         gage_id=[
-            "camels_01022500",
-            "camels_01031500",
-            "camels_01047000",
-            "camels_01052500",
-            "camels_01054200",
-            "camels_01055000",
-            "camels_01057000",
-            "camelsaus_102101A",
-            "camelsaus_108003A",
-            "hysets_06444000",
+            "01013500",
+            "01022500",
+            "01030500",
+            "01031500",
+            "01047000",
+            "01052500",
+            "01054200",
+            "01055000",
+            "01057000",
+            "01170100",
         ],
         batch_size=8,
         hindcast_length=0,
         forecast_length=20,
-        var_t=var_t,
-        var_c=var_c,
+        var_t=["dayl", "prcp", "srad", "tmax", "tmin", "vp"],
+        # var_c=["None"],
         var_out=["streamflow"],
         dataset="StreamflowDataset",
         sampler="KuaiSampler",
