@@ -13,7 +13,6 @@ import fnmatch
 import os
 import re
 import shutil
-import dask
 from functools import reduce
 from pathlib import Path
 import pandas as pd
@@ -280,6 +279,9 @@ def get_evaluation(
             )
         else:
             # TODO: need more test
+            raise NotImplementedError(
+                "we only support the case that the stride is equal to 1 now, others need to be implemented"
+            )
             obss_xr = _rolling_once_evaluate(
                 (basin_num, horizon, nf),
                 target_scaler.rho,
@@ -297,17 +299,14 @@ def get_evaluation(
                 output.reshape(batch_size, horizon, nf),
             )
     elif evaluator["eval_way"] == "1pace":
-        # TODO: to be implemented
-        # in this case, you should set calc_metrics = False in the evaluation config or use BasinBatchSampler in your data config
-        # baceuse we need to calculate the metrics for each time step
-        # but we have multi-outputs for each time step in this case
-        o = output[:, length + prec, :].reshape(basin_num, batch_size, len(target_col))
-        l = labels[:, length + prec, :].reshape(basin_num, batch_size, len(target_col))
-        valdataset = valorte_data_loader.dataset
-        preds_xr = valdataset.denormalize(output)
-        obss_xr = valdataset.denormalize(labels)
-        obs = obss_xr[col].to_numpy()
-        pred = preds_xr[col].to_numpy()
+        pace_idx = evaluator["pace_idx"]
+        # for 1pace with pace_idx meaning which value of output was chosen to show
+        # 1st, we need to transpose data to 4-dim to show the whole data
+        pred = _recover_samples_to_basin(output, valorte_data_loader, pace_idx)
+        obs = _recover_samples_to_basin(labels, valorte_data_loader, pace_idx)
+        valte_dataset = valorte_data_loader.dataset
+        preds_xr = valte_dataset.denormalize(pred)
+        obss_xr = valte_dataset.denormalize(obs)
     elif evaluator["eval_way"] == "rolling":
         # TODO: to be implemented
         raise NotImplementedError(
@@ -316,6 +315,46 @@ def get_evaluation(
     else:
         raise ValueError("eval_way should be rolling or 1pace")
     return obss_xr, preds_xr
+
+
+def _recover_samples_to_basin(arr_3d, valorte_data_loader, pace_idx):
+    """Reorganize the 3D prediction results by basin
+
+    Parameters
+    ----------
+    arr_3d : np.ndarray
+        A 3D prediction array with the shape (total number of samples, number of time steps, number of features).
+    valorte_data_loader: DataLoader
+        The corresponding data loader used to obtain the basin-time index mapping.
+    pace_idx: int
+        Which time step was chosen to show.
+
+    Returns
+        -------
+        np.ndarray
+            The reorganized 3D array with the shape (number of basins, length of time, number of features).
+    """
+    dataset = valorte_data_loader.dataset
+    basin_num = len(dataset.t_s_dict["sites_id"])
+    nt = dataset.nt
+    rho = dataset.rho
+    warmup_len = dataset.warmup_length
+    horizon = dataset.horizon
+    nf = dataset.noutputvar
+
+    basin_array = np.full((basin_num, nt, nf), np.nan)
+
+    for sample_idx in range(arr_3d.shape[0]):
+        # Get the basin and start time index corresponding to this sample
+        basin, start_time = dataset.lookup_table[sample_idx]
+        # Take the value at the last time step of this sample (at the position of rho + horizon)
+        value = arr_3d[sample_idx, pace_idx, :]
+        # Calculate the time position in the result array
+        result_time_idx = start_time + warmup_len + rho + horizon + pace_idx
+        # Fill in the corresponding position
+        basin_array[basin, result_time_idx, :] = value
+
+    return basin_array
 
 
 def evaluate_validation(
@@ -493,7 +532,7 @@ def compute_validation(
     data_loader: DataLoader,
     device: torch.device = None,
     **kwargs,
-) -> float:
+):
     """
     Function to compute the validation loss metrics
 
@@ -518,21 +557,34 @@ def compute_validation(
     obs = []
     preds = []
     valid_loss = 0.0
+    obs_final = None
+    pred_final = None
     with torch.no_grad():
+        iter_num = 0
         for src, trg in data_loader:
             trg, output = model_infer(seq_first, device, model, src, trg)
             obs.append(trg)
             preds.append(output)
             valid_loss_ = compute_loss(trg, output, criterion)
+            if torch.isnan(valid_loss_):
+                # for not-train mode, we may get all nan data for trg
+                # so we skip this batch
+                continue
             valid_loss = valid_loss + valid_loss_.item()
+            iter_num = iter_num + 1
             # clear memory to save GPU memory
+            if obs_final is None:
+                obs_final = trg.detach().cpu()
+                pred_final = output.detach().cpu()
+            else:
+                obs_final = torch.cat([obs_final, trg.detach().cpu()], dim=0)
+                pred_final = torch.cat([pred_final, output.detach().cpu()], dim=0)
+            del trg, output
             torch.cuda.empty_cache()
         # first dim is batch
-        obs_final = torch.cat(obs, dim=0)
-        pred_final = torch.cat(preds, dim=0)
-    valid_loss = valid_loss / len(data_loader)
-    y_obs = obs_final.detach().cpu().numpy()
-    y_pred = pred_final.detach().cpu().numpy()
+    valid_loss = valid_loss / iter_num
+    y_obs = obs_final.numpy()
+    y_pred = pred_final.numpy()
     return y_obs, y_pred, valid_loss
 
 

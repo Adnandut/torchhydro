@@ -495,24 +495,24 @@ class BaseDataset(Dataset):
         end_date = self.t_s_dict["t_final_range"][1]
         return self._read_xyc_specified_time(start_date, end_date)
 
-    def _rm_timeunit_key(self, data_output_ds_):
+    def _rm_timeunit_key(self, ds_):
         """this means the data source return a dict with key as time_unit
             in this BaseDataset, we only support unified time range for all basins, so we chose the first key
             TODO: maybe this could be refactored better
 
         Parameters
         ----------
-        data_output_ds_ : dict
-            the output data with time_unit as key
+        ds_ : dict
+            the xarray data with time_unit as key
 
         Returns
         ----------
-        data_output_ds_ : xr.Dataset
+        ds_ : xr.Dataset
             the output data without time_unit
         """
-        if isinstance(data_output_ds_, dict):
-            data_output_ds_ = data_output_ds_[list(data_output_ds_.keys())[0]]
-        return data_output_ds_
+        if isinstance(ds_, dict):
+            ds_ = ds_[list(ds_.keys())[0]]
+        return ds_
 
     def _read_xyc_specified_time(self, start_date, end_date):
         """Read x, y, c data from data source with specified time range
@@ -654,6 +654,7 @@ class BaseDataset(Dataset):
         for basin in tqdm(range(basin_coordinates), file=sys.stdout, disable=False):
             if not self.train_mode:
                 # we don't need to ignore those with full nan in target vars for prediction without loss calculation
+                # all samples should be included so that we can recover results to specified basins easily
                 lookup.extend(
                     (basin, f)
                     for f in range(warmup_length, max_time_length - rho - horizon + 1)
