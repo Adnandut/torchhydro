@@ -579,7 +579,7 @@ class FedLearnHydro(DeepHydro):
         max_epochs = training_cfgs["epochs"]
         start_epoch = training_cfgs["start_epoch"]
         fl_hyperparam = model_cfgs["fl_hyperparam"]
-        model_filepath = self.cfgs["data_cfgs"]["test_path"]
+        model_filepath = self.cfgs["data_cfgs"]["case_dir"]
 
         # Get data loaders
         data_loader, validation_data_loader = self._get_dataloader(training_cfgs, data_cfgs)
@@ -602,6 +602,9 @@ class FedLearnHydro(DeepHydro):
             t_range_test = data_cfgs.get("t_range_test")
             if t_range_test is None:
                 warnings.warn("Test period (t_range_test) is not provided. Testing will be skipped.")
+           # Initialize variable to store the best model performance
+        best_valid_loss = float("inf")
+        best_epoch = -1
         # Total rounds in a FL system is max_epochs
         for epoch in tqdm(range(start_epoch, max_epochs + 1)):
             print(f"\n | Global Training Round : {epoch} |\n")
@@ -628,20 +631,20 @@ class FedLearnHydro(DeepHydro):
                 w, loss = local_model.model_train()
                 local_weights.append(copy.deepcopy(w))
                 local_losses.append(copy.deepcopy(loss))
-             # Check weight differences before aggregation
-            for i, weights in enumerate(local_weights):
-                for name, param in weights.items():
-                    print(f"Weight difference for user {i}, {name}: {(weights[name] - global_weights[name]).abs().sum()}")
+            #  # Check weight differences before aggregation
+            # for i, weights in enumerate(local_weights):
+            #     for name, param in weights.items():
+            #         print(f"Weight difference for user {i}, {name}: {(weights[name] - global_weights[name]).abs().sum()}")
 
 
-            print(f"Before aggregation: {global_model.state_dict()}")
+            # print(f"Before aggregation: {global_model.state_dict()}")
             global_weights = average_weights(local_weights)
             global_model.load_state_dict(global_weights)
-            print(f"After aggregation: {global_model.state_dict()}")    
-              # Print the aggregated weights
-            print(f"Aggregated Weights after Epoch {epoch + 1}:")
-            for name, param in global_model.named_parameters():
-                print(f"{name}: {param.data.view(-1)[:5]}")
+            # print(f"After aggregation: {global_model.state_dict()}")    
+            #   # Print the aggregated weights
+            # print(f"Aggregated Weights after Epoch {epoch + 1}:")
+            # for name, param in global_model.named_parameters():
+            #     print(f"{name}: {param.data.view(-1)[:5]}")
             # save model wieghts for comaprison
             torch.save(global_model.state_dict(), f"epoch_{epoch}.pth")
             # aggrerate training loss
@@ -667,6 +670,13 @@ class FedLearnHydro(DeepHydro):
                     valid_loss, valid_metrics = self._1epoch_valid(
                         training_cfgs, criterion, validation_data_loader, valid_logs
                     )
+            # Check if validation loss has improved, save the model if it has
+            if valid_loss is not None and valid_loss < best_valid_loss:
+                best_valid_loss = valid_loss
+                best_epoch = epoch
+                # Save the model with the best validation loss
+                torch.save(global_model.state_dict(), os.path.join(model_filepath, "best_model.pth"))
+                print(f"New best model saved at epoch {epoch} with validation loss: {best_valid_loss}")
 
             # Step the scheduler
             self._scheduler_step(training_cfgs, scheduler, valid_loss)
@@ -728,19 +738,19 @@ class FedLearnHydro(DeepHydro):
                 print("Overall Accuracy: {:.2f}% \n".format(100 * overall_accuracy))
                 print("Overall MSE: {:.4f} \n".format(overall_mse))
             # Print the weights of the global model
-            print(f"Global Model Weights after Epoch {epoch}:")
-            for name, param in global_model.named_parameters():
-                print(f"{name}: {param.data.view(-1)[:5]}")
+            # print(f"Global Model Weights after Epoch {epoch}:")
+            # for name, param in global_model.named_parameters():
+            #     print(f"{name}: {param.data.view(-1)[:5]}")
         # Close the logger
         logger.tb.close()
         # compare saved weights from consecutive epochs
-        if start_epoch < max_epochs:
-            state1 = torch.load(f"epoch_{start_epoch}.pth")
-            state2 = torch.load(f"epoch_{max_epochs}.pth")
-            print("weights comparison between epoch 1 and epoch 2")
-            for key in state1:
-                diff = state1[key] - state2[key].abs().sum()
-                print(f"{key}: Difference {diff}")
+        # if start_epoch < max_epochs:
+        #     state1 = torch.load(f"epoch_{start_epoch}.pth")
+        #     state2 = torch.load(f"epoch_{max_epochs}.pth")
+        #     print("weights comparison between epoch 1 and epoch 2")
+        #     for key in state1:
+        #         diff = state1[key] - state2[key].abs().sum()
+        #         print(f"{key}: Difference {diff}")
 
 
     def _get_a_user_cfgs(self, idx, t_range_train, t_range_valid, t_range_test):
