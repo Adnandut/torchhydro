@@ -48,8 +48,8 @@ def config():
             "01052500",
             "01054200",
         ],
-        forecast_history=365,
-        forecast_length=1,
+        forecast_history=0,
+        forecast_length=30,
         var_t=["prcp", "dayl", "srad", "tmax", "tmin", "vp"],
         # var_c=["None"],
         var_out=["streamflow"],
@@ -87,6 +87,4 @@ def config():
 
 def test_train_evaluate(config):
     train_and_evaluate(config)
-
-
-print("federalted learning process is finished.")
+    print("federalted learning process is finished.")

@@ -627,9 +627,10 @@ class FedLearnHydro(DeepHydro):
             for idx in idx_users:
                 print(f"Training user index: {idx}")
                  # Each user will be used to train the model locally
-                user_cfgs = self._get_a_user_cfgs(idx, t_range_train, t_range_valid, t_range_test)
+                user_cfgs = self._get_a_user_cfgs(idx)
                 local_model = DeepHydro(user_cfgs, pre_model=copy.deepcopy(global_model))
                 #train local model
+                # we need to get the best w for valid loss rather than the train loss
                 w, loss = local_model.model_train()
                 local_weights.append(copy.deepcopy(w))
                 local_losses.append(copy.deepcopy(loss))
@@ -756,7 +757,7 @@ class FedLearnHydro(DeepHydro):
         #         print(f"{key}: Difference {diff}")
 
 
-    def _get_a_user_cfgs(self, idx, t_range_train, t_range_valid, t_range_test):
+    def _get_a_user_cfgs(self, idx):
         """Get a user's configs for local training"""
         user = self.user_groups[idx]
 
@@ -778,11 +779,8 @@ class FedLearnHydro(DeepHydro):
 
         longest_date_range = max(date_ranges.values(), key=lambda x: x[1] - x[0])
         longest_date_range = [np.datetime_as_string(dt, unit="D") for dt in longest_date_range]
-
         user_cfgs = copy.deepcopy(self.cfgs)
-        update_nested_dict(user_cfgs, ["data_cfgs", "t_range_train"], t_range_train)
-        update_nested_dict(user_cfgs, ["data_cfgs", "t_range_valid"], t_range_valid)
-        update_nested_dict(user_cfgs, ["data_cfgs", "t_range_test"], t_range_test)
+        # update_nested_dict(user_cfgs, ["data_cfgs", f"t_range_{mode}"], longest_date_range)
         update_nested_dict(user_cfgs, ["data_cfgs", "object_ids"], basins)
 
         # Update training_cfgs
@@ -802,16 +800,11 @@ class FedLearnHydro(DeepHydro):
             ["training_cfgs", "batch_size"],
             user_cfgs["model_cfgs"]["fl_hyperparam"]["fl_local_bs"],
         )
-        update_nested_dict(
-            user_cfgs,
-            ["data_cfgs", "batch_size"],
-            user_cfgs["model_cfgs"]["fl_hyperparam"]["fl_local_bs"],
-        )
 
         # Update model_cfgs
         update_nested_dict(user_cfgs, ["model_cfgs", "model_type"], "Normal")
         update_nested_dict(user_cfgs, ["model_cfgs", "fl_hyperparam"], None)
-
+        # TODO: use early_stopping strategy for local training because we need to use the best model
         return user_cfgs
 
 class TransLearnHydro(DeepHydro):

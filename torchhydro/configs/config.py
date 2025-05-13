@@ -82,6 +82,7 @@ def default_config_file():
                 "fl_local_bs": 6,
                 # the fraction of clients
                 "fl_frac": 0.1,
+                # 
             },
             "tl_hyperparam": {
                 # part of transfer learning in a model: a list of layers' names, such as ["lstm"]

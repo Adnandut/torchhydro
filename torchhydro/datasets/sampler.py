@@ -149,6 +149,7 @@ def fl_sample_basin(dataset: BaseDataset):
     """
     lookup_table = dataset.lookup_table
     basins = dataset.basins
+    times = dataset.times
 
     # Initialize basin_groups to map each basin to a list of indices
     basin_groups = defaultdict(list)
@@ -156,28 +157,38 @@ def fl_sample_basin(dataset: BaseDataset):
     # Populate basin_groups with indices for each basin
     for idx, (basin_index, date) in lookup_table.items():
         actual_basin = basins[basin_index]
-        basin_groups[actual_basin].append((actual_basin,date))
+        actual_time = times[date]
+        basin_groups[actual_basin].append((actual_basin, actual_time))
 
-    #number of users corredponds to the number of basins
+    # number of users corredponds to the number of basins
     num_users = len(basins)
     # group basins by user
 
-    user_basins = defaultdict(list)
-    for i, basin in enumerate(basins):
-        user_id = i % num_users
-        user_basins[user_id].append(basin)
+    user_basins = _user_has_which_basins(basins)
 
     # a lookup_table subset for each user
     user_lookup_tables = {}
     for user_id, assigned_basins in user_basins.items():
         user_lookup_table = {}
         for basin in assigned_basins:
-            # Iterate over the entries in basin_groups for the current basin
+            # Iterate over the entries in basin_groups for the current basin; doesn't matter the index start from 0 or 1
             for idx, entry in enumerate(basin_groups[basin], start=1):
                 user_lookup_table[idx] = entry
         user_lookup_tables[user_id] = user_lookup_table
 
     return user_lookup_tables
+
+
+def _user_has_which_basins(basins):
+    """
+    A function to decide which user has which basins
+    """
+    user_basins = defaultdict(list)
+    for i, basin in enumerate(basins):
+        # user_id = i % num_users # check why use %
+        user_id = i
+        user_basins[user_id].append(basin)
+    return user_basins
 
 
 def fl_sample_region(dataset: BaseDataset):
@@ -225,17 +236,23 @@ def fl_sample_region(dataset: BaseDataset):
 
     # Read the file that contains huc_id and basin info
     def read_and_classify_basins(file_path):
-    # Read the file into a pandas DataFrame
-        df = pd.read_csv(file_path, dtype={'HUC_02': str, 'GAGE_ID': str})  # Ensure 'HUC_02' and 'GAGE_ID' are strings
-        
+        # Read the file into a pandas DataFrame
+        df = pd.read_csv(
+            file_path, dtype={"HUC_02": str, "GAGE_ID": str}
+        )  # Ensure 'HUC_02' and 'GAGE_ID' are strings
+
         # Dictionary to store basins by region
         region_basins = {region: [] for region in region_mapping.values()}
-        
+
         # Iterate over the rows and classify basins based on the region
         for index, row in df.iterrows():
             # Convert HUC_02 to string and pad with leading zero if necessary
-            huc_id = str(row['HUC_02']).zfill(2)  # Ensures HUC_ID is treated as a string
-            basin = str(row['GAGE_ID']).zfill(8)  # Basin ID as a string, leading zeros preserved
+            huc_id = str(row["HUC_02"]).zfill(
+                2
+            )  # Ensures HUC_ID is treated as a string
+            basin = str(row["GAGE_ID"]).zfill(
+                8
+            )  # Basin ID as a string, leading zeros preserved
             if huc_id in region_mapping:
                 region = region_mapping[huc_id]
                 region_basins[region].append(basin)
@@ -243,6 +260,7 @@ def fl_sample_region(dataset: BaseDataset):
                 print(f"Warning: HUC_ID {huc_id} not found in region_mapping")
 
         return region_basins
+
     # Example usage
     file_path = "D:/data/waterism/datasets-origin/camels/camels_us/basin_timeseries_v1p2_metForcing_obsFlow/basin_dataset_public_v1p2/basin_metadata/regions.csv"  # Replace with your file path
     region_basins = read_and_classify_basins(file_path)
@@ -257,8 +275,8 @@ def fl_sample_region(dataset: BaseDataset):
 
     # Number of users corresponds to the number of regions
     # num_users = len(region_basins)
-    
-     # Initialize basin_groups to map each basin to a list of indices
+
+    # Initialize basin_groups to map each basin to a list of indices
     basin_groups = defaultdict(list)
 
     # Populate basin_groups with indices for each basin
@@ -269,9 +287,11 @@ def fl_sample_region(dataset: BaseDataset):
     # Create lookup tables for each region (user)
     user_lookup_tables = defaultdict(dict)
     user_id = 0  # This will be used to assign users (regions)
- # Iterate through the regions and assign basins to the appropriate region (user)
+    # Iterate through the regions and assign basins to the appropriate region (user)
     for region, region_basin_list in region_basins.items():
-        user_lookup_table = defaultdict(list)  # Use list to store multiple (basin, date) pairs for each basin
+        user_lookup_table = defaultdict(
+            list
+        )  # Use list to store multiple (basin, date) pairs for each basin
 
         # Track if any basin from user-provided basins belongs to the current region
         region_has_basins = False
@@ -279,7 +299,9 @@ def fl_sample_region(dataset: BaseDataset):
         # Check for each basin in user-provided basins
         for basin in basins:
             # Ensure the basin is properly formatted (leading zeros if needed)
-            basin = str(basin).zfill(8)  # Ensure basin is treated as string with leading zeros
+            basin = str(basin).zfill(
+                8
+            )  # Ensure basin is treated as string with leading zeros
 
             # Check if the basin exists in the basin_groups
             if basin in basin_groups:
@@ -288,17 +310,25 @@ def fl_sample_region(dataset: BaseDataset):
                     region_has_basins = True  # Mark that this region has basins
 
                     # Add all the (basin, date) pairs to the user_lookup_table for this region
-                    user_lookup_table[basin].extend(basin_groups[basin])  # Extend to store all (basin, date)
+                    user_lookup_table[basin].extend(
+                        basin_groups[basin]
+                    )  # Extend to store all (basin, date)
 
         # Only add the user_lookup_table if the region has basins
         if region_has_basins:
-            region_number = int(region.split()[-1])  # This will extract the number from 'Region X'
+            region_number = int(
+                region.split()[-1]
+            )  # This will extract the number from 'Region X'
             user_id = region_number - 1  # Since region is 1-based, user_id is region-1
 
-            user_lookup_tables[user_id] = dict(user_lookup_table)  # Convert defaultdict to regular dict
+            user_lookup_tables[user_id] = dict(
+                user_lookup_table
+            )  # Convert defaultdict to regular dict
     # Calculate the number of users (regions)
     region_users = list(user_lookup_tables.keys())
     return user_lookup_tables, region_users
+
+
 data_sampler_dict = {
     "KuaiSampler": KuaiSampler,
     "BasinBatchSampler": BasinBatchSampler,
