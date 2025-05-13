@@ -1,7 +1,7 @@
 """
 Author: Wenyu Ouyang
 Date: 2024-04-08 18:16:26
-LastEditTime: 2025-04-18 08:46:07
+LastEditTime: 2025-04-27 18:36:57
 LastEditors: Wenyu Ouyang
 Description: Some basic functions for training
 FilePath: /HydroForecastEval/mnt/disk1/owen/code/torchhydro/torchhydro/trainers/train_utils.py
@@ -308,13 +308,58 @@ def get_evaluation(
         preds_xr = valte_dataset.denormalize(pred)
         obss_xr = valte_dataset.denormalize(obs)
     elif evaluator["eval_way"] == "rolling":
-        # TODO: to be implemented
-        raise NotImplementedError(
-            "we will implement this function in the future, please choose 1pace or once now"
-        )
+        # TODO: to be test
+        pred = _recover_samples_to_4d(output, valorte_data_loader, evaluator["stride"])
+        obs = _recover_samples_to_4d(labels, valorte_data_loader, evaluator["stride"])
+        valte_dataset = valorte_data_loader.dataset
+        preds_xr = valte_dataset.denormalize(pred)
+        obss_xr = valte_dataset.denormalize(obs)
     else:
         raise ValueError("eval_way should be rolling or 1pace")
     return obss_xr, preds_xr
+
+
+def _recover_samples_to_4d(arr_3d, valorte_data_loader, stride):
+    """Reorganize the 3D prediction results to 4D
+    TODO: to be finished
+
+    Parameters
+    ----------
+    arr_3d : np.ndarray
+        A 3D prediction array with the shape (total number of samples, number of time steps, number of features).
+    valorte_data_loader: DataLoader
+        The corresponding data loader used to obtain the basin-time index mapping.
+    stride: int
+        The stride of the rolling.
+
+    Returns
+        -------
+        np.ndarray
+            The reorganized 4D array with the shape (number of basins, length of time, forecast steps, number of features).
+    """
+    dataset = valorte_data_loader.dataset
+    batch_size = valorte_data_loader.batch_size
+    basin_num = len(dataset.t_s_dict["sites_id"])
+    nt = dataset.nt
+    rho = dataset.rho
+    warmup_len = dataset.warmup_length
+    horizon = dataset.horizon
+    nf = dataset.noutputvar
+
+    # Initialize the 4D array with NaN values
+    basin_array = np.full((basin_num, nt - warmup_len - rho, horizon, nf), np.nan)
+
+    for sample_idx in range(arr_3d.shape[0]):
+        # Get the basin and start time index corresponding to this sample
+        basin, start_time = dataset.lookup_table[sample_idx]
+        # Take the value at the last time step of this sample (at the position of rho + horizon)
+        value = arr_3d[sample_idx, warmup_len + rho :, :]
+        # Calculate the time position in the result array
+        result_time_idx = start_time + warmup_len + stride * (sample_idx % batch_size)
+        # Fill in the corresponding position
+        basin_array[basin, result_time_idx, :, :] = value
+
+    return basin_array
 
 
 def _recover_samples_to_basin(arr_3d, valorte_data_loader, pace_idx):
@@ -347,10 +392,13 @@ def _recover_samples_to_basin(arr_3d, valorte_data_loader, pace_idx):
     for sample_idx in range(arr_3d.shape[0]):
         # Get the basin and start time index corresponding to this sample
         basin, start_time = dataset.lookup_table[sample_idx]
-        # Take the value at the last time step of this sample (at the position of rho + horizon)
-        value = arr_3d[sample_idx, pace_idx, :]
         # Calculate the time position in the result array
-        result_time_idx = start_time + warmup_len + rho + horizon + pace_idx
+        if pace_idx < 0:
+            value = arr_3d[sample_idx, pace_idx, :]
+            result_time_idx = start_time + warmup_len + rho + horizon + pace_idx
+        else:
+            value = arr_3d[sample_idx, pace_idx - 1, :]
+            result_time_idx = start_time + warmup_len + rho + pace_idx - 1
         # Fill in the corresponding position
         basin_array[basin, result_time_idx, :] = value
 
@@ -561,7 +609,7 @@ def compute_validation(
     pred_final = None
     with torch.no_grad():
         iter_num = 0
-        for src, trg in data_loader:
+        for src, trg in tqdm(data_loader, desc="Processing", total=len(data_loader)):
             trg, output = model_infer(seq_first, device, model, src, trg)
             obs.append(trg)
             preds.append(output)
