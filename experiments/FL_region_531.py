@@ -80,6 +80,7 @@ def run_normal_dl(
         },
         ctx=[-1],
         model_name="CpuLSTM",
+        model_type="FedLearn",
         model_hyperparam={
             "n_input_features": len(var_c) + len(var_t),
             "n_output_features": 1,
@@ -93,7 +94,10 @@ def run_normal_dl(
             "gamma_norm_cols": ["prcp"],
             "pbm_norm": False,
         },
-        batch_size=256,
+        fl_local_bs=256,
+        fl_local_ep=30,
+        fl_sample="region",
+        fl_frac=1,
         forecast_history=270,
         dropout=0.4,
         forecast_length=1,
@@ -106,7 +110,7 @@ def run_normal_dl(
         test_period=test_period,
         opt="Adam",
         rs=1234,
-        train_epoch=10,
+        train_epoch=5,
         save_epoch=1,
         model_loader={
             "load_way": "best",
@@ -135,5 +139,5 @@ def run_normal_dl(
 # ......
 # Then it can be read by pd.read_csv(gage_id_file, dtype={0: str}).iloc[:, 0].values to get the gage_id list
 run_normal_dl(
-    os.path.join("ndl", "expkratzertfinal"), "D:/torchhydro/data/basin_531.csv"
+    os.path.join("FLRegion1", "expkratzert"), "D:/torchhydro/data/basin_531.csv"
 )

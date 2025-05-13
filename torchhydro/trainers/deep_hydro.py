@@ -647,18 +647,19 @@ class FedLearnHydro(DeepHydro):
             #     print(f"{name}: {param.data.view(-1)[:5]}")
             # save model wieghts for comaprison
             torch.save(global_model.state_dict(), f"epoch_{epoch}.pth")
-            # aggrerate training loss
-            avg_train_loss = np.mean(local_losses)
+           
             # Log training metrics
             with logger.log_epoch_train(epoch) as train_logs:
-                avg_train_loss, n_iter_ep = torch_single_train(
-                    self.model,
-                    opt,
-                    criterion,
-                    data_loader,
-                    device=self.device,
-                    which_first_tensor=training_cfgs["which_first_tensor"],
-                )
+                # avg_train_loss, n_iter_ep = torch_single_train(
+                #     self.model,
+                #     opt,
+                #     criterion,
+                #     data_loader,
+                #     device=self.device,
+                #     which_first_tensor=training_cfgs["which_first_tensor"],
+                # )
+                 # aggrerate training loss
+                avg_train_loss = np.mean(local_losses)
                 train_logs["train_loss"] = avg_train_loss
                 train_logs["model"] = self.model
                 train_loss.append(avg_train_loss)
@@ -683,7 +684,7 @@ class FedLearnHydro(DeepHydro):
             print(f"[DEBUG] Logging Loss for Epoch {epoch}: {train_logs['train_loss']}")
 
             # Save session parameters
-            logger.save_session_param(epoch, avg_train_loss, n_iter_ep, valid_loss, valid_metrics)
+            logger.save_session_param(epoch, avg_train_loss, valid_loss, valid_metrics)
 
             # Save the model and its parameters
             logger.save_model_and_params(self.model, epoch, self.cfgs)

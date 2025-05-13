@@ -7,6 +7,7 @@ Description: A test for federated learning
 FilePath: \torchhydro\tests\test_federated_learning.py
 Copyright (c) 2023-2024 Wenyu Ouyang. All rights reserved.
 """
+
 import os
 import pytest
 
@@ -51,13 +52,13 @@ def config():
         dataset="StreamflowDataset",
         sampler="KuaiSampler",
         scaler="DapengScaler",
-        train_epoch=2,
+        train_epoch=3,
         save_epoch=1,
         fl_sample="region",
         fl_frac=1,
         fl_local_bs=8,
         fl_local_ep=5,
-        model_loader={'load_way': 'latest'},
+        model_loader={"load_way": "best", "test_epoch": "best_model.pth"},
         train_period=["2000-10-01", "2001-10-01"],
         valid_period=["2001-10-01", "2002-10-01"],
         test_period=["2002-10-01", "2003-10-01"],
@@ -68,7 +69,7 @@ def config():
         lr_scheduler={1: 1e-2, 2: 5e-3, 3: 1e-3},
         which_first_tensor="sequence",
     )
-   
+
     update_cfg(config_data, args)
     return config_data
 

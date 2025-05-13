@@ -7,6 +7,7 @@ Description: A test for federated learning
 FilePath: \torchhydro\tests\test_federated_learning.py
 Copyright (c) 2023-2024 Wenyu Ouyang. All rights reserved.
 """
+
 import os
 import pytest
 
@@ -38,42 +39,47 @@ def config():
             "n_output_features": 1,
             "n_hidden_states": 256,
         },
-        gage_id= ['01013500',
-                  '01022500',
-                   '01030500',
-                    '01031500',
-                     '01047000',
-                      '01052500',
-                      '01054200',
+        gage_id=[
+            "01013500",
+            "01022500",
+            "01030500",
+            "01031500",
+            "01047000",
+            "01052500",
+            "01054200",
         ],
-        batch_size=100,
-        forecast_history=0,
-        forecast_length=20,
+        forecast_history=365,
+        forecast_length=1,
         var_t=["prcp", "dayl", "srad", "tmax", "tmin", "vp"],
         # var_c=["None"],
         var_out=["streamflow"],
         dataset="StreamflowDataset",
-        sampler="KuaiSampler",
-        scaler="DapengScaler",
+        scaler="StandardScaler",
+        scaler_params={
+            "prcp_norm_cols": ["streamflow"],
+            "gamma_norm_cols": ["prcp"],
+            "pbm_norm": False,
+        },
         train_epoch=1,
         save_epoch=1,
         fl_sample="basin",
-        fl_frac=0.1,
+        fl_frac=0.5,
         fl_local_bs=32,
         fl_local_ep=10,
-        model_loader={'load_way': 'latest'},
+        model_loader={"load_way": "latest", "test_epoch": "latest_model.pth"},
         train_period=["1994-10-01", "1995-10-01"],
-        valid_period=None,
-        test_period=None,
+        valid_period=["1995-10-01", "1996-10-01"],
+        test_period=["1996-10-01", "1997-10-01"],
         loss_func="RMSESum",
         opt="Adam",
         rs=1234,
         train_mode=1,
-    
         # key is epoch, start from 1
-        lr_scheduler={1: 1e-2, 2: 5e-3, 3: 1e-3},
+        opt_param={
+            "lr": 0.01,
+        },
+        lr_scheduler={1: 1, 5: 0.1},
         which_first_tensor="sequence",
-        
     )
     update_cfg(config_data, args)
     return config_data
@@ -81,4 +87,6 @@ def config():
 
 def test_train_evaluate(config):
     train_and_evaluate(config)
+
+
 print("federalted learning process is finished.")
