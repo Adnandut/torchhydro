@@ -273,7 +273,7 @@ def default_config_file():
                 # "lr_factor": 0.1, "lr_patience": 1,
             },
             "early_stopping": False,
-            "patience": 1,
+            "patience": 5,
             "epochs": 20,
             # save_epoch ==0 means only save once in the final epoch
             "save_epoch": 0,

@@ -60,7 +60,7 @@ def config():
             "gamma_norm_cols": ["prcp"],
             "pbm_norm": False,
         },
-        train_epoch=1,
+        train_epoch=3,
         save_epoch=1,
         fl_sample="basin",
         fl_frac=0.5,
@@ -73,12 +73,11 @@ def config():
         loss_func="RMSESum",
         opt="Adam",
         rs=1234,
-        train_mode=1,
         # key is epoch, start from 1
         opt_param={
             "lr": 0.01,
         },
-        lr_scheduler={1: 1, 5: 0.1},
+        lr_scheduler={1: 0.01, 5: 0.001},
         which_first_tensor="sequence",
     )
     update_cfg(config_data, args)

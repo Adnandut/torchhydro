@@ -209,6 +209,7 @@ def fl_sample_region(dataset: BaseDataset):
     """
     lookup_table = dataset.lookup_table  # {index -> (region_index, basin_index, date)}
     basins = dataset.basins  # List of basin names
+    times = dataset.times  # List of time indices
     import pandas as pd
 
     # Define the region mapping
@@ -282,7 +283,8 @@ def fl_sample_region(dataset: BaseDataset):
     # Populate basin_groups with indices for each basin
     for idx, (basin_index, date) in lookup_table.items():
         actual_basin = basins[basin_index]
-        basin_groups[actual_basin].append((actual_basin, date))
+        actual_time = times[date]
+        basin_groups[actual_basin].append((actual_basin, actual_time))
 
     # Create lookup tables for each region (user)
     user_lookup_tables = defaultdict(dict)

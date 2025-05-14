@@ -32,7 +32,7 @@ from torchhydro.datasets.data_dict import datasets_dict
 from torchhydro.datasets.data_sets import BaseDataset
 from torchhydro.datasets.sampler import (
     fl_sample_basin,
-    fl_sample_region,                                                               
+    fl_sample_region,
     data_sampler_dict,
 )
 from torchhydro.models.model_dict_function import (
@@ -234,7 +234,7 @@ class DeepHydro(DeepHydroInterface):
             )
         return dataset
 
-    def model_train(self) -> None:
+    def model_train(self, return_best_weights=False) -> None:
         """train a hydrological DL model"""
         # A dictionary of the necessary parameters for training
         training_cfgs = self.cfgs["training_cfgs"]
@@ -254,6 +254,9 @@ class DeepHydro(DeepHydroInterface):
             training_cfgs, data_cfgs
         )
         logger = TrainLogger(model_filepath, self.cfgs, opt)
+        best_weights = None
+        best_loss = float("inf")
+
         for epoch in range(start_epoch, max_epochs + 1):
             with logger.log_epoch_train(epoch) as train_logs:
                 total_loss, n_iter_ep = torch_single_train(
@@ -274,6 +277,13 @@ class DeepHydro(DeepHydroInterface):
                     valid_loss, valid_metrics = self._1epoch_valid(
                         training_cfgs, criterion, validation_data_loader, valid_logs
                     )
+            # track the best weights by validation loss
+            if valid_loss is not None and valid_loss < best_loss:
+                best_loss = valid_loss
+                best_weights = copy.deepcopy(self.model.state_dict())
+            elif valid_loss is not None and total_loss < best_loss:
+                best_loss = total_loss
+                best_weights = copy.deepcopy(self.model.state_dict())
 
             self._scheduler_step(training_cfgs, scheduler, valid_loss)
             logger.save_session_param(
@@ -290,7 +300,9 @@ class DeepHydro(DeepHydroInterface):
         # logger.plot_model_structure(self.model)
         logger.tb.close()
 
-        # return the trained model weights and bias and the epoch loss
+        # return the best weights if requested, otherwise latest weights and mean epoch loss
+        if return_best_weights and best_weights is not None:
+            return best_weights, best_loss
         return self.model.state_dict(), sum(logger.epoch_loss) / len(logger.epoch_loss)
 
     def _get_scheduler(self, training_cfgs, opt):
@@ -561,7 +573,9 @@ class FedLearnHydro(DeepHydro):
         """Number of users in federated learning"""
         return len(self.user_groups)
 
-    def model_train(self, t_range_train=None, t_range_valid=None, t_range_test=None) -> None:
+    def model_train(
+        self, t_range_train=None, t_range_valid=None, t_range_test=None
+    ) -> None:
         # BUILD MODEL
         global_model = self.model
 
@@ -584,27 +598,35 @@ class FedLearnHydro(DeepHydro):
         model_filepath = self.cfgs["data_cfgs"]["case_dir"]
 
         # Get data loaders
-        data_loader, validation_data_loader = self._get_dataloader(training_cfgs, data_cfgs)
+        data_loader, validation_data_loader = self._get_dataloader(
+            training_cfgs, data_cfgs
+        )
 
         # Create a logger
         logger = TrainLogger(model_filepath, self.cfgs, opt)
 
-       # Set periods if provided, otherwise issue a warning
+        # Set periods if provided, otherwise issue a warning
         if t_range_train is None:
             t_range_train = data_cfgs.get("t_range_train")
             if t_range_train is None:
-                warnings.warn("Training period (t_range_train) is not provided. Training will proceed without a defined period.")
+                warnings.warn(
+                    "Training period (t_range_train) is not provided. Training will proceed without a defined period."
+                )
 
         if t_range_valid is None:
             t_range_valid = data_cfgs.get("t_range_valid")
             if t_range_valid is None:
-                warnings.warn("Validation period (t_range_valid) is not provided. Validation will be skipped.")
+                warnings.warn(
+                    "Validation period (t_range_valid) is not provided. Validation will be skipped."
+                )
 
         if t_range_test is None:
             t_range_test = data_cfgs.get("t_range_test")
             if t_range_test is None:
-                warnings.warn("Test period (t_range_test) is not provided. Testing will be skipped.")
-           # Initialize variable to store the best model performance
+                warnings.warn(
+                    "Test period (t_range_test) is not provided. Testing will be skipped."
+                )
+        # Initialize variable to store the best model performance
         best_valid_loss = float("inf")
         best_epoch = -1
         # Total rounds in a FL system is max_epochs
@@ -616,22 +638,26 @@ class FedLearnHydro(DeepHydro):
                 print(f"{name}: {param.data.view(-1)[:5]}")
             local_weights, local_losses = [], []
             m = max(int(fl_hyperparam["fl_frac"] * self.num_users), 1)
-           
+
             # Randomly select m users, they will be the clients in this round
-            
+
             if fl_hyperparam["fl_sample"] == "basin":
-                   idx_users = np.random.choice(range(self.num_users), m, replace=False)
+                idx_users = np.random.choice(range(self.num_users), m, replace=False)
             elif fl_hyperparam["fl_sample"] == "region":
-                   idx_users = np.random.choice(list(self.user_groups.keys()), m, replace=False)
+                idx_users = np.random.choice(
+                    list(self.user_groups.keys()), m, replace=False
+                )
             self.idx_users = idx_users
             for idx in idx_users:
                 print(f"Training user index: {idx}")
-                 # Each user will be used to train the model locally
+                # Each user will be used to train the model locally
                 user_cfgs = self._get_a_user_cfgs(idx)
-                local_model = DeepHydro(user_cfgs, pre_model=copy.deepcopy(global_model))
-                #train local model
+                local_model = DeepHydro(
+                    user_cfgs, pre_model=copy.deepcopy(global_model)
+                )
+                # train local model
                 # we need to get the best w for valid loss rather than the train loss
-                w, loss = local_model.model_train()
+                w, loss = local_model.model_train(return_best_weights=True)
                 local_weights.append(copy.deepcopy(w))
                 local_losses.append(copy.deepcopy(loss))
             #  # Check weight differences before aggregation
@@ -639,18 +665,17 @@ class FedLearnHydro(DeepHydro):
             #     for name, param in weights.items():
             #         print(f"Weight difference for user {i}, {name}: {(weights[name] - global_weights[name]).abs().sum()}")
 
-
             # print(f"Before aggregation: {global_model.state_dict()}")
             global_weights = average_weights(local_weights)
             global_model.load_state_dict(global_weights)
-            # print(f"After aggregation: {global_model.state_dict()}")    
+            # print(f"After aggregation: {global_model.state_dict()}")
             #   # Print the aggregated weights
             # print(f"Aggregated Weights after Epoch {epoch + 1}:")
             # for name, param in global_model.named_parameters():
             #     print(f"{name}: {param.data.view(-1)[:5]}")
             # save model wieghts for comaprison
             torch.save(global_model.state_dict(), f"epoch_{epoch}.pth")
-           
+
             # Log training metrics
             with logger.log_epoch_train(epoch) as train_logs:
                 # avg_train_loss, n_iter_ep = torch_single_train(
@@ -661,12 +686,14 @@ class FedLearnHydro(DeepHydro):
                 #     device=self.device,
                 #     which_first_tensor=training_cfgs["which_first_tensor"],
                 # )
-                 # aggrerate training loss
+                # aggrerate training loss
                 avg_train_loss = np.mean(local_losses)
                 train_logs["train_loss"] = avg_train_loss
                 train_logs["model"] = self.model
                 train_loss.append(avg_train_loss)
-                print(f"[DEBUG] Epoch {epoch}: Computed Training Loss = {avg_train_loss}")
+                print(
+                    f"[DEBUG] Epoch {epoch}: Computed Training Loss = {avg_train_loss}"
+                )
             valid_loss = None
             valid_metrics = None
             if data_cfgs["t_range_valid"] is not None:
@@ -679,8 +706,13 @@ class FedLearnHydro(DeepHydro):
                 best_valid_loss = valid_loss
                 best_epoch = epoch
                 # Save the model with the best validation loss
-                torch.save(global_model.state_dict(), os.path.join(model_filepath, "best_model.pth"))
-                print(f"New best model saved at epoch {epoch} with validation loss: {best_valid_loss}")
+                torch.save(
+                    global_model.state_dict(),
+                    os.path.join(model_filepath, "best_model.pth"),
+                )
+                print(
+                    f"New best model saved at epoch {epoch} with validation loss: {best_valid_loss}"
+                )
 
             # Step the scheduler
             self._scheduler_step(training_cfgs, scheduler, valid_loss)
@@ -698,26 +730,29 @@ class FedLearnHydro(DeepHydro):
             global_model.eval()
             if fl_hyperparam["fl_sample"] == "basin":
                 for c in range(self.num_users):
-                    one_user_cfg = self._get_a_user_cfgs(c, t_range_train, t_range_valid, t_range_test)
+                    one_user_cfg = self._get_a_user_cfgs(
+                        c
+                    )
                     local_model = DeepHydro(
                         one_user_cfg,
                         pre_model=global_model,
                     )
                     preds, obss = local_model.model_evaluate()
-                    all_preds.append(preds['streamflow'].values)
-                    all_obss.append(obss['streamflow'].values)
+                    all_preds.append(preds["streamflow"].values)
+                    all_obss.append(obss["streamflow"].values)
             elif fl_hyperparam["fl_sample"] == "region":
                 for c in list(self.user_groups.keys()):
-                    one_user_cfg = self._get_a_user_cfgs(c, t_range_train, t_range_valid, t_range_test)
+                    one_user_cfg = self._get_a_user_cfgs(
+                        c
+                    )
                     local_model = DeepHydro(
                         one_user_cfg,
                         pre_model=global_model,
                     )
                     preds, obss = local_model.model_evaluate()
-                    all_preds.append(preds['streamflow'].values)
-                    all_obss.append(obss['streamflow'].values)
-           
-           
+                    all_preds.append(preds["streamflow"].values)
+                    all_obss.append(obss["streamflow"].values)
+
             # Concatenate all predictions and observations
             all_preds = np.concatenate(all_preds, axis=0)
             all_obss = np.concatenate(all_obss, axis=0)
@@ -733,7 +768,6 @@ class FedLearnHydro(DeepHydro):
 
             # Calculate average training loss
             avg_train_loss = np.mean(train_loss)
-
 
             # Print global training stats after every 'print_every' rounds
             if (epoch + 1) % print_every == 0:
@@ -756,7 +790,6 @@ class FedLearnHydro(DeepHydro):
         #         diff = state1[key] - state2[key].abs().sum()
         #         print(f"{key}: Difference {diff}")
 
-
     def _get_a_user_cfgs(self, idx):
         """Get a user's configs for local training"""
         user = self.user_groups[idx]
@@ -765,11 +798,15 @@ class FedLearnHydro(DeepHydro):
         for user_key, value in user.items():
             if isinstance(value, list):  # If the user has multiple basins (one region)
                 for basin, time in value:  # Unpack each (basin_id, date) tuple
-                    time_datetime64 = np.datetime64(time, 'D')  # Convert time to datetime64
-                    basin_dates[basin].append(time_datetime64)  # Store time for each basin
+                    time_datetime64 = np.datetime64(
+                        time, "D"
+                    )  # Convert time to datetime64
+                    basin_dates[basin].append(
+                        time_datetime64
+                    )  # Store time for each basin
             else:  # If the user has a single basin (one basin per user)
                 basin, time = value  # Unpack the single (basin_id, date) tuple
-                time_datetime64 = np.datetime64(time, 'D')  # Convert time to datetime64
+                time_datetime64 = np.datetime64(time, "D")  # Convert time to datetime64
                 basin_dates[basin].append(time_datetime64)  # Store time for the basin
         basins = []
         date_ranges = {}
@@ -778,7 +815,9 @@ class FedLearnHydro(DeepHydro):
             date_ranges[basin] = (np.min(times), np.max(times))
 
         longest_date_range = max(date_ranges.values(), key=lambda x: x[1] - x[0])
-        longest_date_range = [np.datetime_as_string(dt, unit="D") for dt in longest_date_range]
+        longest_date_range = [
+            np.datetime_as_string(dt, unit="D") for dt in longest_date_range
+        ]
         user_cfgs = copy.deepcopy(self.cfgs)
         # update_nested_dict(user_cfgs, ["data_cfgs", f"t_range_{mode}"], longest_date_range)
         update_nested_dict(user_cfgs, ["data_cfgs", "object_ids"], basins)
@@ -805,7 +844,17 @@ class FedLearnHydro(DeepHydro):
         update_nested_dict(user_cfgs, ["model_cfgs", "model_type"], "Normal")
         update_nested_dict(user_cfgs, ["model_cfgs", "fl_hyperparam"], None)
         # TODO: use early_stopping strategy for local training because we need to use the best model
+        update_nested_dict(
+            user_cfgs,
+            ["training_cfgs", "early_stopping"],
+            {
+                "patience": 5,
+                "save_best": True,
+                "save_name": "best_model.pth",
+            },
+        )
         return user_cfgs
+
 
 class TransLearnHydro(DeepHydro):
     def __init__(self, cfgs: Dict, pre_model=None):
