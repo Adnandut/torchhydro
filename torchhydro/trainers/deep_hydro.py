@@ -281,9 +281,6 @@ class DeepHydro(DeepHydroInterface):
             if valid_loss is not None and valid_loss < best_loss:
                 best_loss = valid_loss
                 best_weights = copy.deepcopy(self.model.state_dict())
-            elif valid_loss is not None and total_loss < best_loss:
-                best_loss = total_loss
-                best_weights = copy.deepcopy(self.model.state_dict())
 
             self._scheduler_step(training_cfgs, scheduler, valid_loss)
             logger.save_session_param(
@@ -844,15 +841,15 @@ class FedLearnHydro(DeepHydro):
         update_nested_dict(user_cfgs, ["model_cfgs", "model_type"], "Normal")
         update_nested_dict(user_cfgs, ["model_cfgs", "fl_hyperparam"], None)
         # TODO: use early_stopping strategy for local training because we need to use the best model
-        update_nested_dict(
-            user_cfgs,
-            ["training_cfgs", "early_stopping"],
-            {
-                "patience": 5,
-                "save_best": True,
-                "save_name": "best_model.pth",
-            },
-        )
+        # update_nested_dict(
+        #     user_cfgs,
+        #     ["training_cfgs", "early_stopping"],
+        #     {
+        #         "patience": 5,
+        #         "save_best": True,
+        #         "save_name": "best_model.pth",
+        #     },
+        # )
         return user_cfgs
 
 
