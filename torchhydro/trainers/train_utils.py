@@ -647,6 +647,14 @@ def average_weights(w):
         w_avg[key] = torch.div(w_avg[key], len(w))
     return w_avg
 
+def average_weights_w(w, lens):
+    total = sum(lens)
+    w_avg = copy.deepcopy(w[0])
+    for key in w_avg.keys():
+        w_avg[key] = w[0][key] * (lens[0] / total)
+        for i in range(1, len(w)):
+            w_avg[key] += w[i][key] * (lens[i] / total)
+    return w_avg
 
 def _find_min_validation_loss_epoch(data):
     """

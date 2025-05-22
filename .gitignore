@@ -136,4 +136,6 @@ mlruns/
 .idea
 results/
 # ignore the data directory
-data/
+data/*
+tests/*
+experiments/*

@@ -45,6 +45,7 @@ from torchhydro.trainers.train_logger import TrainLogger
 from torchhydro.trainers.train_utils import (
     EarlyStopper,
     average_weights,
+    average_weights_w,
     evaluate_validation,
     compute_validation,
     model_infer,
@@ -630,9 +631,9 @@ class FedLearnHydro(DeepHydro):
         for epoch in tqdm(range(start_epoch, max_epochs + 1)):
             print(f"\n | Global Training Round : {epoch} |\n")
             # print model parameters before training this epoch
-            print(f"Model wieghts before training epoch {epoch}:")
-            for name, param in global_model.named_parameters():
-                print(f"{name}: {param.data.view(-1)[:5]}")
+            # print(f"Model wieghts before training epoch {epoch}:")
+            # for name, param in global_model.named_parameters():
+            #     print(f"{name}: {param.data.view(-1)[:5]}")
             local_weights, local_losses = [], []
             m = max(int(fl_hyperparam["fl_frac"] * self.num_users), 1)
 
@@ -655,15 +656,23 @@ class FedLearnHydro(DeepHydro):
                 # train local model
                 # we need to get the best w for valid loss rather than the train loss
                 w, loss = local_model.model_train(return_best_weights=True)
+                #     # DEBUG: After local training, before aggregation
+                # w_norm = sum([torch.norm(param).item() for param in w.values()])
+                # print(f"[DEBUG] Weight norm after training user {idx} (user_id={idx}): {w_norm}")
                 local_weights.append(copy.deepcopy(w))
                 local_losses.append(copy.deepcopy(loss))
-            #  # Check weight differences before aggregation
-            # for i, weights in enumerate(local_weights):
-            #     for name, param in weights.items():
-            #         print(f"Weight difference for user {i}, {name}: {(weights[name] - global_weights[name]).abs().sum()}")
+           # Before aggregation
+                # print("[DEBUG] Global weights before aggregation (sample):")
+                # for name, param in global_weights.items():
+                #     print(f"  {name}: {param.view(-1)[:5]}")
 
-            # print(f"Before aggregation: {global_model.state_dict()}")
-            global_weights = average_weights(local_weights)
+            
+            lens = [1 for _ in local_weights]
+            global_weights = average_weights_w(local_weights, lens)
+            # # After aggregation
+            # print("[DEBUG] Global weights after aggregation (sample):")
+            # for name, param in global_weights.items():
+            #     print(f"  {name}: {param.view(-1)[:5]}")
             global_model.load_state_dict(global_weights)
             # print(f"After aggregation: {global_model.state_dict()}")
             #   # Print the aggregated weights
@@ -671,7 +680,7 @@ class FedLearnHydro(DeepHydro):
             # for name, param in global_model.named_parameters():
             #     print(f"{name}: {param.data.view(-1)[:5]}")
             # save model wieghts for comaprison
-            torch.save(global_model.state_dict(), f"epoch_{epoch}.pth")
+            torch.save(global_model.state_dict(), os.path.join(model_filepath, f"epoch_{epoch}.pth"))
 
             # Log training metrics
             with logger.log_epoch_train(epoch) as train_logs:
@@ -765,7 +774,6 @@ class FedLearnHydro(DeepHydro):
 
             # Calculate average training loss
             avg_train_loss = np.mean(train_loss)
-
             # Print global training stats after every 'print_every' rounds
             if (epoch + 1) % print_every == 0:
                 print(f" \nAvg Training Stats after {epoch + 1} global rounds:")

@@ -21,7 +21,7 @@ import numpy as np
 
 @pytest.fixture()
 def config():
-    project_name = os.path.join("test_camels", "test3")
+    project_name = os.path.join("test_camels", "testglobal11")
     config_data = default_config_file()
     args = cmd(
         sub=project_name,
@@ -60,10 +60,11 @@ def config():
             "gamma_norm_cols": ["prcp"],
             "pbm_norm": False,
         },
-        train_epoch=3,
+        train_epoch=10,
         save_epoch=1,
         fl_sample="basin",
         fl_frac=0.5,
+        fl_num_users=7,
         fl_local_bs=32,
         fl_local_ep=10,
         early_stopping=True,
