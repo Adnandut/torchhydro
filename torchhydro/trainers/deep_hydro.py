@@ -235,7 +235,7 @@ class DeepHydro(DeepHydroInterface):
             )
         return dataset
 
-    def model_train(self, return_best_weights=False) -> None:
+    def model_train(self, return_best_weights=False, save_model= True) -> None:
         """train a hydrological DL model"""
         # A dictionary of the necessary parameters for training
         training_cfgs = self.cfgs["training_cfgs"]
@@ -287,7 +287,8 @@ class DeepHydro(DeepHydroInterface):
             logger.save_session_param(
                 epoch, total_loss, n_iter_ep, valid_loss, valid_metrics
             )
-            logger.save_model_and_params(self.model, epoch, self.cfgs)
+            if save_model:
+                logger.save_model_and_params(self.model, epoch, self.cfgs)
             if es and not es.check_loss(
                 self.model,
                 valid_loss,
@@ -655,7 +656,7 @@ class FedLearnHydro(DeepHydro):
                 )
                 # train local model
                 # we need to get the best w for valid loss rather than the train loss
-                w, loss = local_model.model_train(return_best_weights=True)
+                w, loss = local_model.model_train(return_best_weights=True, save_model=False)
                 #     # DEBUG: After local training, before aggregation
                 # w_norm = sum([torch.norm(param).item() for param in w.values()])
                 # print(f"[DEBUG] Weight norm after training user {idx} (user_id={idx}): {w_norm}")
@@ -727,8 +728,8 @@ class FedLearnHydro(DeepHydro):
             # Save session parameters
             logger.save_session_param(epoch, avg_train_loss, valid_loss, valid_metrics)
 
-            # Save the model and its parameters
-            logger.save_model_and_params(self.model, epoch, self.cfgs)
+            # # Save the model and its parameters
+            # logger.save_model_and_params(self.model, epoch, self.cfgs)
 
             # Initialize lists to aggregate predictions and observations
             all_preds = []
