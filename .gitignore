@@ -137,5 +137,4 @@ mlruns/
 results/
 # ignore the data directory
 data/*
-tests/*
-experiments/*
+
