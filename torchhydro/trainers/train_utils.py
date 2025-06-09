@@ -213,9 +213,9 @@ def calculate_and_record_metrics(
     inds = stat_error(obs, pred, fill_nan_value)
 
     for evaluation_metric in evaluation_metrics:
-        eval_log[f"{evaluation_metric} of {target_col}"] = inds[
-            evaluation_metric
-        ].tolist()
+        eval_values = inds[evaluation_metric]
+        # Convert to list safely (handle nan values)
+        eval_log[f"{evaluation_metric} of {target_col}"] = eval_values.tolist()
 
     return eval_log
 
@@ -573,6 +573,99 @@ def torch_single_train(
     total_loss = running_loss / float(n_iter_ep)
     return total_loss, n_iter_ep
 
+
+
+def torch_single_train_fedprox(
+    model,
+    opt: torch.optim.Optimizer,
+    criterion,
+    data_loader: torch.utils.data.DataLoader,
+    device=None,
+    fedprox_mu: float = 0.0,
+    global_weights: dict = None,
+    **kwargs,
+) -> tuple[float, int]:
+    """
+    Training function for one epoch with optional FedProx regularization.
+
+    Parameters
+    ----------
+    model : nn.Module
+        A PyTorch model.
+    opt : torch.optim.Optimizer
+        Optimizer function.
+    criterion
+        Loss function.
+    data_loader : DataLoader
+        Loads data to model.
+    device
+        Device for tensors and model.
+    fedprox_mu : float
+        FedProx hyperparameter mu. If <= 0, FedProx is not applied.
+    global_weights : dict
+        Dictionary of global model weights (from .state_dict()).
+    **kwargs
+        Extra keyword arguments. Must contain 'which_first_tensor'.
+
+    Returns
+    -------
+    tuple(float, int)
+        Average loss of this epoch and number of iterations.
+
+    Raises
+    ------
+    ValueError
+        If NaN or Inf loss is encountered.
+    """
+
+    model.train()
+    n_iter_ep = 0
+    running_loss = 0.0
+
+    which_first_tensor = kwargs["which_first_tensor"]
+    seq_first = which_first_tensor != "batch"
+    pbar = tqdm(data_loader, desc="Training")
+
+    # Prepare FedProx global parameters (if enabled)
+    use_fedprox = fedprox_mu > 0 and global_weights is not None
+    if use_fedprox:
+        global_params = [param.detach().to(device) for param in global_weights.values()]
+    else:
+        global_params = None
+
+    for _, (src, trg) in enumerate(pbar):
+        trg, output = model_infer(seq_first, device, model, src, trg)
+
+        loss = compute_loss(trg, output, criterion, **kwargs)
+
+        # FedProx proximal regularization
+        if use_fedprox:
+            prox_reg = 0.0
+            for w, w_global in zip(model.parameters(), global_params):
+                prox_reg += (w - w_global).norm(2) ** 2
+            loss += (fedprox_mu / 2) * prox_reg
+
+        if loss > 100:
+            print(" Warning: high loss detected")
+
+        if torch.isnan(loss):
+            raise ValueError(" NaN loss detected")
+
+        loss.backward()
+        opt.step()
+        model.zero_grad()
+
+        if loss == float("inf"):
+            raise ValueError(" Infinite loss detected. Check data or normalization.")
+
+        running_loss += loss.item()
+        n_iter_ep += 1
+
+    if n_iter_ep == 0:
+        raise ValueError(" All batch computations of loss result in NaN.")
+
+    total_loss = running_loss / float(n_iter_ep)
+    return total_loss, n_iter_ep
 
 def compute_validation(
     model,

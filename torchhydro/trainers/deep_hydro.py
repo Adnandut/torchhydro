@@ -51,6 +51,7 @@ from torchhydro.trainers.train_utils import (
     model_infer,
     read_pth_from_model_loader,
     torch_single_train,
+    torch_single_train_fedprox,
     get_evaluation,
 )
 
@@ -303,6 +304,97 @@ class DeepHydro(DeepHydroInterface):
         if return_best_weights and best_weights is not None:
             return best_weights, best_loss
         return self.model.state_dict(), sum(logger.epoch_loss) / len(logger.epoch_loss)
+    
+
+    def model_train_fedprox(self, return_best_weights=False, save_model=True, fedprox_mu=0.0, global_weights=None):
+        """
+        Train local model with optional FedProx proximal regularization.
+        """
+        training_cfgs = self.cfgs["training_cfgs"]
+        model_filepath = self.cfgs["data_cfgs"]["case_dir"]
+        data_cfgs = self.cfgs["data_cfgs"]
+
+        es = EarlyStopper(training_cfgs["patience"]) if training_cfgs["early_stopping"] else None
+
+        criterion = self._get_loss_func(training_cfgs)
+        opt = self._get_optimizer(training_cfgs)
+        scheduler = self._get_scheduler(training_cfgs, opt)
+
+        max_epochs = training_cfgs["epochs"]
+        start_epoch = training_cfgs["start_epoch"]
+
+        data_loader, validation_data_loader = self._get_dataloader(training_cfgs, data_cfgs)
+        logger = TrainLogger(model_filepath, self.cfgs, opt)
+
+        best_weights = None
+        best_loss = float("inf")
+
+        # Prepare global weights for FedProx if applicable
+        if fedprox_mu > 0 and global_weights is not None:
+            print(f"[INFO] FedProx enabled with mu = {fedprox_mu}")
+        else:
+            print("[INFO] FedProx not applied.")
+
+        for epoch in range(start_epoch, max_epochs + 1):
+            
+
+            with logger.log_epoch_train(epoch) as train_logs:
+                    total_loss, n_iter_ep = torch_single_train_fedprox(
+                        model=self.model,
+                        criterion=criterion,
+                        opt=opt,
+                        data_loader=data_loader,
+                        fedprox_mu=fedprox_mu,
+                        global_weights=global_weights,
+                        which_first_tensor=training_cfgs["which_first_tensor"],
+                    )
+               
+
+                    train_logs["train_loss"] = total_loss
+                    train_logs["model"] = self.model
+                    print(f"[Epoch {epoch}] Avg Train Loss: {total_loss:.6f}")
+
+            valid_loss = None
+            valid_metrics = None
+            if data_cfgs["t_range_valid"] is not None:
+                with logger.log_epoch_valid(epoch) as valid_logs:
+                    valid_loss, valid_metrics = self._1epoch_valid(
+                        training_cfgs, criterion, validation_data_loader, valid_logs
+                    )
+            # track the best weights by validation loss
+            if valid_loss is not None and valid_loss < best_loss:
+                best_loss = valid_loss
+                best_weights = copy.deepcopy(self.model.state_dict())
+
+            self._scheduler_step(training_cfgs, scheduler, valid_loss)
+            logger.save_session_param(
+                epoch, total_loss, n_iter_ep, valid_loss, valid_metrics
+            )
+            if save_model:
+                logger.save_model_and_params(self.model, epoch, self.cfgs)
+            if es and not es.check_loss(
+                self.model,
+                valid_loss,
+                self.cfgs["data_cfgs"]["case_dir"],
+            ):
+                print("Stopping model now")
+                break
+        # logger.plot_model_structure(self.model)
+        logger.tb.close()
+
+        # return the best weights if requested, otherwise latest weights and mean epoch loss
+        if return_best_weights and best_weights is not None:
+            return best_weights, best_loss
+        return self.model.state_dict(), sum(logger.epoch_loss) / len(logger.epoch_loss)
+
+            
+
+           
+
+
+
+
+
 
     def _get_scheduler(self, training_cfgs, opt):
         lr_scheduler_cfg = training_cfgs["lr_scheduler"]
@@ -573,10 +665,12 @@ class FedLearnHydro(DeepHydro):
         return len(self.user_groups)
 
     def model_train(
-        self, t_range_train=None, t_range_valid=None, t_range_test=None
+        self, t_range_train=None, t_range_valid=None, fedprox_mu= None, t_range_test=None
     ) -> None:
         # BUILD MODEL
         global_model = self.model
+        if fedprox_mu is None:
+            fedprox_mu = self.cfgs["model_cfgs"]["fl_hyperparam"].get("fedprox_mu", 0.0)
 
         # Copy weights
         global_weights = global_model.state_dict()
@@ -651,25 +745,27 @@ class FedLearnHydro(DeepHydro):
                 print(f"Training user index: {idx}")
                 # Each user will be used to train the model locally
                 user_cfgs = self._get_a_user_cfgs(idx)
+                print(f"[DEBUG] Training on basins: {user_cfgs['data_cfgs']['object_ids']}")
                 local_model = DeepHydro(
                     user_cfgs, pre_model=copy.deepcopy(global_model)
                 )
                 # train local model
                 # we need to get the best w for valid loss rather than the train loss
-                w, loss = local_model.model_train(return_best_weights=True, save_model=False)
+                print(f"[DEBUG] fedprox_mu before calling model_train_fedprox: {fedprox_mu}")
+                w, loss = local_model.model_train_fedprox(return_best_weights=True, save_model=False, fedprox_mu= fedprox_mu, global_weights=global_weights)
                 #     # DEBUG: After local training, before aggregation
                 # w_norm = sum([torch.norm(param).item() for param in w.values()])
                 # print(f"[DEBUG] Weight norm after training user {idx} (user_id={idx}): {w_norm}")
                 local_weights.append(copy.deepcopy(w))
                 local_losses.append(copy.deepcopy(loss))
-           # Before aggregation
-                # print("[DEBUG] Global weights before aggregation (sample):")
-                # for name, param in global_weights.items():
-                #     print(f"  {name}: {param.view(-1)[:5]}")
+            # Before aggregation
+            # print("[DEBUG] Global weights before aggregation (sample):")
+            # for name, param in global_weights.items():
+            #     print(f"  {name}: {param.view(-1)[:5]}")
 
-            
-            lens = [1 for _ in local_weights]
-            global_weights = average_weights_w(local_weights, lens)
+            # lens = [1 for _ in local_weights]
+            # global_weights = average_weights_w(local_weights,lens)
+            global_weights = average_weights(local_weights)
             # # After aggregation
             # print("[DEBUG] Global weights after aggregation (sample):")
             # for name, param in global_weights.items():
@@ -726,7 +822,16 @@ class FedLearnHydro(DeepHydro):
             print(f"[DEBUG] Logging Loss for Epoch {epoch}: {train_logs['train_loss']}")
 
             # Save session parameters
-            logger.save_session_param(epoch, avg_train_loss, valid_loss, valid_metrics)
+            #logger.save_session_param(epoch, avg_train_loss, valid_loss, valid_metrics)
+            # Save session log (no epoch time)
+            logger.save_session_param(
+                epoch,
+                total_loss=avg_train_loss,
+                n_iter_ep=0,  # Use 0 or actual value if available
+                valid_loss=valid_loss,
+                valid_metrics=valid_metrics,
+            )
+            logger.save_logs_to_file()
 
             # # Save the model and its parameters
             # logger.save_model_and_params(self.model, epoch, self.cfgs)
@@ -747,6 +852,7 @@ class FedLearnHydro(DeepHydro):
                     preds, obss = local_model.model_evaluate()
                     all_preds.append(preds["streamflow"].values)
                     all_obss.append(obss["streamflow"].values)
+            # If sampling by region, iterate over user_groups
             elif fl_hyperparam["fl_sample"] == "region":
                 for c in list(self.user_groups.keys()):
                     one_user_cfg = self._get_a_user_cfgs(

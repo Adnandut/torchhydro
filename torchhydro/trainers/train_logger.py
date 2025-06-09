@@ -190,6 +190,17 @@ class TrainLogger:
                         global_step,
                         dataformats=img_format,
                     )
+    def save_logs_to_file(self):
+        log_file = os.path.join(self.training_save_dir, "run_log.json")
+        all_cfgs = {
+            "training_cfgs": self.training_cfgs,
+            "data_cfgs": self.data_cfgs,
+            "evaluation_cfgs": self.evaluation_cfgs,
+            "model_cfgs": self.model_cfgs,
+            "run": self.session_params,
+        }
+        with open(log_file, "w") as f:
+            json.dump(all_cfgs, f, indent=4)
 
     def plot_model_structure(self, model):
         """plot model structure in tensorboard

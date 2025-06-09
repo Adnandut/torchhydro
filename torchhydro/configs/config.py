@@ -82,7 +82,8 @@ def default_config_file():
                 "fl_local_bs": 6,
                 # the fraction of clients
                 "fl_frac": 0.1,
-                # 
+                # fedprox mu
+                "fedprox_mu": 0.00001,
             },
             "tl_hyperparam": {
                 # part of transfer learning in a model: a list of layers' names, such as ["lstm"]
@@ -440,6 +441,7 @@ def cmd(
     min_time_interval=None,
     valid_batch_mode=None,
     evaluator=None,
+    fedprox_mu=None, # for federated learning
 ):
     """input args from cmd"""
     parser = argparse.ArgumentParser(
@@ -524,6 +526,12 @@ def cmd(
         help="the fraction of clients for federated learning",
         default=fl_frac,
         type=float,
+    )
+    parser.add_argument(
+        "--fedprox_mu",
+        type=float,
+        default=None,
+        help="Proximal term coefficient (mu) for FedProx",
     )
     parser.add_argument(
         "--master_addr",
@@ -1061,6 +1069,8 @@ def update_cfg(cfg_file, new_args):
         cfg_file["model_cfgs"]["fl_hyperparam"]["fl_local_bs"] = new_args.fl_local_bs
     if new_args.fl_frac is not None:
         cfg_file["model_cfgs"]["fl_hyperparam"]["fl_frac"] = new_args.fl_frac
+    if new_args.fedprox_mu is not None:
+        cfg_file["model_cfgs"]["fl_hyperparam"]["fedprox_mu"] = new_args.fedprox_mu
     if new_args.master_addr is not None:
         cfg_file["training_cfgs"]["master_addr"] = new_args.master_addr
     if new_args.port is not None:
