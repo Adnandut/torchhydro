@@ -68,6 +68,8 @@ def default_config_file():
                 "dropout": 0.2,
             },
             "weight_path": None,
+            # pretrain_path is used for federated learning in which we need to pretrain a model
+            "pretrain_path": None,
             "continue_train": True,
             # federated learning parameters
             "fl_hyperparam": {
@@ -83,7 +85,7 @@ def default_config_file():
                 # the fraction of clients
                 "fl_frac": 0.1,
                 # fedprox mu
-                "fedprox_mu": 0.00001,
+                "fedprox_mu": 0.001,
             },
             "tl_hyperparam": {
                 # part of transfer learning in a model: a list of layers' names, such as ["lstm"]
@@ -399,6 +401,7 @@ def cmd(
     model_type=None,
     model_name=None,
     weight_path=None,
+    pretrain_path=None,  # ✅ New argument for pretrained model
     continue_train=None,
     var_c=None,
     c_rm_nan=None,
@@ -532,6 +535,14 @@ def cmd(
         type=float,
         default=None,
         help="Proximal term coefficient (mu) for FedProx",
+    )
+    # adding pretrain_path for federated learning to intilialize the model from pretrain model instead of random weights
+    parser.add_argument(
+        "--pretrain_path",
+        dest="pretrain_path",
+        help="Path to the pretrained model weights",
+        default=pretrain_path,
+        type=str,
     )
     parser.add_argument(
         "--master_addr",
@@ -1071,6 +1082,8 @@ def update_cfg(cfg_file, new_args):
         cfg_file["model_cfgs"]["fl_hyperparam"]["fl_frac"] = new_args.fl_frac
     if new_args.fedprox_mu is not None:
         cfg_file["model_cfgs"]["fl_hyperparam"]["fedprox_mu"] = new_args.fedprox_mu
+    if new_args.pretrain_path is not None:
+        cfg_file["model_cfgs"]["pretrain_path"] = new_args.pretrain_path
     if new_args.master_addr is not None:
         cfg_file["training_cfgs"]["master_addr"] = new_args.master_addr
     if new_args.port is not None:

@@ -629,7 +629,8 @@ def torch_single_train_fedprox(
     # Prepare FedProx global parameters (if enabled)
     use_fedprox = fedprox_mu > 0 and global_weights is not None
     if use_fedprox:
-        global_params = [param.detach().to(device) for param in global_weights.values()]
+         # Match by key, not order
+        global_params = {k: v.detach().to(device) for k, v in global_weights.items()}
     else:
         global_params = None
 
@@ -641,8 +642,11 @@ def torch_single_train_fedprox(
         # FedProx proximal regularization
         if use_fedprox:
             prox_reg = 0.0
-            for w, w_global in zip(model.parameters(), global_params):
-                prox_reg += (w - w_global).norm(2) ** 2
+            for (name, w) in model.named_parameters():
+                if name in global_params:
+                    w_global = global_params[name]
+                    assert w.shape == w_global.shape, f"Shape mismatch in FedProx regularization for param '{name}': {w.shape} vs {w_global.shape}"
+                    prox_reg += (w - w_global).norm(2) ** 2
             loss += (fedprox_mu / 2) * prox_reg
 
         if loss > 100:
@@ -748,6 +752,26 @@ def average_weights_w(w, lens):
         for i in range(1, len(w)):
             w_avg[key] += w[i][key] * (lens[i] / total)
     return w_avg
+def compute_weights_distances(state_dict_a, state_dict_b):
+    """
+    Compute the distance between two sets of model weights.
+
+    Parameters
+    ----------
+    state_dict_a : dict
+        The state dictionary of the first model.
+    state_dict_b : dict
+        The state dictionary of the second model.
+
+    Returns
+    -------
+    float
+        The L2 norm distance between the two sets of weights.
+    """
+    dist = 0.0
+    for k in state_dict_a.keys():
+        dist += torch.norm(state_dict_a[k] - state_dict_b[k]).item() ** 2
+    return dist ** 0.5 
 
 def _find_min_validation_loss_epoch(data):
     """

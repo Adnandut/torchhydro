@@ -16,6 +16,7 @@ from collections import defaultdict
 from functools import reduce
 from typing import Dict, Tuple
 import warnings
+import matplotlib.pyplot as plt
 
 import numpy as np
 import xarray as xr
@@ -46,6 +47,7 @@ from torchhydro.trainers.train_utils import (
     EarlyStopper,
     average_weights,
     average_weights_w,
+    compute_weights_distances,
     evaluate_validation,
     compute_validation,
     model_infer,
@@ -236,7 +238,7 @@ class DeepHydro(DeepHydroInterface):
             )
         return dataset
 
-    def model_train(self, return_best_weights=False, save_model= True) -> None:
+    def model_train(self, return_best_weights=False, save_model=True) -> None:
         """train a hydrological DL model"""
         # A dictionary of the necessary parameters for training
         training_cfgs = self.cfgs["training_cfgs"]
@@ -304,9 +306,14 @@ class DeepHydro(DeepHydroInterface):
         if return_best_weights and best_weights is not None:
             return best_weights, best_loss
         return self.model.state_dict(), sum(logger.epoch_loss) / len(logger.epoch_loss)
-    
 
-    def model_train_fedprox(self, return_best_weights=False, save_model=True, fedprox_mu=0.0, global_weights=None):
+    def model_train_fedprox(
+        self,
+        return_best_weights=False,
+        save_model=True,
+        fedprox_mu=0.0,
+        global_weights=None,
+    ):
         """
         Train local model with optional FedProx proximal regularization.
         """
@@ -314,7 +321,11 @@ class DeepHydro(DeepHydroInterface):
         model_filepath = self.cfgs["data_cfgs"]["case_dir"]
         data_cfgs = self.cfgs["data_cfgs"]
 
-        es = EarlyStopper(training_cfgs["patience"]) if training_cfgs["early_stopping"] else None
+        es = (
+            EarlyStopper(training_cfgs["patience"])
+            if training_cfgs["early_stopping"]
+            else None
+        )
 
         criterion = self._get_loss_func(training_cfgs)
         opt = self._get_optimizer(training_cfgs)
@@ -323,7 +334,9 @@ class DeepHydro(DeepHydroInterface):
         max_epochs = training_cfgs["epochs"]
         start_epoch = training_cfgs["start_epoch"]
 
-        data_loader, validation_data_loader = self._get_dataloader(training_cfgs, data_cfgs)
+        data_loader, validation_data_loader = self._get_dataloader(
+            training_cfgs, data_cfgs
+        )
         logger = TrainLogger(model_filepath, self.cfgs, opt)
 
         best_weights = None
@@ -336,23 +349,22 @@ class DeepHydro(DeepHydroInterface):
             print("[INFO] FedProx not applied.")
 
         for epoch in range(start_epoch, max_epochs + 1):
-            
 
             with logger.log_epoch_train(epoch) as train_logs:
-                    total_loss, n_iter_ep = torch_single_train_fedprox(
-                        model=self.model,
-                        criterion=criterion,
-                        opt=opt,
-                        data_loader=data_loader,
-                        fedprox_mu=fedprox_mu,
-                        global_weights=global_weights,
-                        which_first_tensor=training_cfgs["which_first_tensor"],
-                    )
-               
+                total_loss, n_iter_ep = torch_single_train_fedprox(
+                    model=self.model,
+                    criterion=criterion,
+                    opt=opt,
+                    data_loader=data_loader,
+                    fedprox_mu=fedprox_mu,
+                    global_weights=global_weights,
+                    which_first_tensor=training_cfgs["which_first_tensor"],
+                    device=self.device,
+                )
 
-                    train_logs["train_loss"] = total_loss
-                    train_logs["model"] = self.model
-                    print(f"[Epoch {epoch}] Avg Train Loss: {total_loss:.6f}")
+                train_logs["train_loss"] = total_loss
+                train_logs["model"] = self.model
+                print(f"[Epoch {epoch}] Avg Train Loss: {total_loss:.6f}")
 
             valid_loss = None
             valid_metrics = None
@@ -386,15 +398,6 @@ class DeepHydro(DeepHydroInterface):
         if return_best_weights and best_weights is not None:
             return best_weights, best_loss
         return self.model.state_dict(), sum(logger.epoch_loss) / len(logger.epoch_loss)
-
-            
-
-           
-
-
-
-
-
 
     def _get_scheduler(self, training_cfgs, opt):
         lr_scheduler_cfg = training_cfgs["lr_scheduler"]
@@ -665,16 +668,31 @@ class FedLearnHydro(DeepHydro):
         return len(self.user_groups)
 
     def model_train(
-        self, t_range_train=None, t_range_valid=None, fedprox_mu= None, t_range_test=None
+        self, t_range_train=None, t_range_valid=None, fedprox_mu=None, t_range_test=None
     ) -> None:
         # BUILD MODEL
         global_model = self.model
         if fedprox_mu is None:
             fedprox_mu = self.cfgs["model_cfgs"]["fl_hyperparam"].get("fedprox_mu", 0.0)
+        pretrain_path = self.cfgs["model_cfgs"].get("pretrain_path", None)
+        pretrain_weights = None
+        start_epoch = self.cfgs["training_cfgs"]["start_epoch"]
+        if start_epoch == 1 and pretrain_path and os.path.exists(pretrain_path):
+            print(f"Loading pre-trained model from {pretrain_path} for intialization.")
+            global_model.load_state_dict(
+                torch.load(pretrain_path, map_location=self.device)
+            )
+            pretrained_weights = copy.deepcopy(global_model.state_dict())
+        else:
+            print(
+                "[info] No pre-trained model found or start_epoch is not 0, skipping pre-training."
+            )
 
         # Copy weights
         global_weights = global_model.state_dict()
-
+        # store the drift distances and epochs
+        self.drift_epochs = []
+        self.drift_distances = []
         # Training
         train_loss, train_accuracy = [], []
         print_every = 2
@@ -745,14 +763,23 @@ class FedLearnHydro(DeepHydro):
                 print(f"Training user index: {idx}")
                 # Each user will be used to train the model locally
                 user_cfgs = self._get_a_user_cfgs(idx)
-                print(f"[DEBUG] Training on basins: {user_cfgs['data_cfgs']['object_ids']}")
+                print(
+                    f"[DEBUG] Training on basins: {user_cfgs['data_cfgs']['object_ids']}"
+                )
                 local_model = DeepHydro(
                     user_cfgs, pre_model=copy.deepcopy(global_model)
                 )
                 # train local model
                 # we need to get the best w for valid loss rather than the train loss
-                print(f"[DEBUG] fedprox_mu before calling model_train_fedprox: {fedprox_mu}")
-                w, loss = local_model.model_train_fedprox(return_best_weights=True, save_model=False, fedprox_mu= fedprox_mu, global_weights=global_weights)
+                print(
+                    f"[DEBUG] fedprox_mu before calling model_train_fedprox: {fedprox_mu}"
+                )
+                w, loss = local_model.model_train_fedprox(
+                    return_best_weights=True,
+                    save_model=False,
+                    fedprox_mu=fedprox_mu,
+                    global_weights=global_weights,
+                )
                 #     # DEBUG: After local training, before aggregation
                 # w_norm = sum([torch.norm(param).item() for param in w.values()])
                 # print(f"[DEBUG] Weight norm after training user {idx} (user_id={idx}): {w_norm}")
@@ -766,6 +793,10 @@ class FedLearnHydro(DeepHydro):
             # lens = [1 for _ in local_weights]
             # global_weights = average_weights_w(local_weights,lens)
             global_weights = average_weights(local_weights)
+            print(f"[DEBUG] Aggregated global weights (sample):")
+            for name, param in global_weights.items():
+                print(f"  {name}: {param.view(-1)[:3]}")
+                break  # Only print the first parameter for brevity
             # # After aggregation
             # print("[DEBUG] Global weights after aggregation (sample):")
             # for name, param in global_weights.items():
@@ -774,10 +805,36 @@ class FedLearnHydro(DeepHydro):
             # print(f"After aggregation: {global_model.state_dict()}")
             #   # Print the aggregated weights
             # print(f"Aggregated Weights after Epoch {epoch + 1}:")
+            # compute the distances between global model and pre-trained model
+            
+            
+    
             # for name, param in global_model.named_parameters():
             #     print(f"{name}: {param.data.view(-1)[:5]}")
+            # Only compute drift if pre-trained weights are loaded
+            if epoch >= 1 and pretrain_path and os.path.exists(pretrain_path):
+                drift = compute_weights_distances(global_model.state_dict(), pretrained_weights)
+                self.drift_epochs.append(epoch)
+                self.drift_distances.append(drift)
+                print(f"[DEBUG] Epoch {epoch}: Drift from pre-trained model = {drift}")
+            if pretrain_path and os.path.exists(pretrain_path):
+                plt.figure()
+                plt.plot(self.drift_epochs, self.drift_distances, marker='o', label='Model Drift (L2 distance)')
+                plt.xlabel("Global Epoch")
+                plt.ylabel("Drift from Pre-trained Model")
+                plt.title("Model Drift Over FL Rounds")
+                plt.legend()
+                plt.grid()
+                drift_plot_path = os.path.join(model_filepath, "drift_plot.png")
+                plt.savefig(drift_plot_path)
+                plt.close()
+                print(f"[INFO] Drift plot saved to {drift_plot_path}")
+
             # save model wieghts for comaprison
-            torch.save(global_model.state_dict(), os.path.join(model_filepath, f"epoch_{epoch}.pth"))
+            torch.save(
+                global_model.state_dict(),
+                os.path.join(model_filepath, f"epoch_{epoch}.pth"),
+            )
 
             # Log training metrics
             with logger.log_epoch_train(epoch) as train_logs:
@@ -794,9 +851,11 @@ class FedLearnHydro(DeepHydro):
                 train_logs["train_loss"] = avg_train_loss
                 train_logs["model"] = self.model
                 train_loss.append(avg_train_loss)
+                print(f"[DEBUG] User {idx} local loss: {loss}")
                 print(
                     f"[DEBUG] Epoch {epoch}: Computed Training Loss = {avg_train_loss}"
                 )
+            # Initialize validation loss and metrics
             valid_loss = None
             valid_metrics = None
             if data_cfgs["t_range_valid"] is not None:
@@ -804,6 +863,9 @@ class FedLearnHydro(DeepHydro):
                     valid_loss, valid_metrics = self._1epoch_valid(
                         training_cfgs, criterion, validation_data_loader, valid_logs
                     )
+            print(f"[DEBUG] Epoch {epoch} validation loss: {valid_loss}")
+            if valid_metrics:
+                print(f"[DEBUG] Epoch {epoch} validation metrics: {valid_metrics}")
             # Check if validation loss has improved, save the model if it has
             if valid_loss is not None and valid_loss < best_valid_loss:
                 best_valid_loss = valid_loss
@@ -820,9 +882,12 @@ class FedLearnHydro(DeepHydro):
             # Step the scheduler
             self._scheduler_step(training_cfgs, scheduler, valid_loss)
             print(f"[DEBUG] Logging Loss for Epoch {epoch}: {train_logs['train_loss']}")
+            print(
+                f"[DEBUG] Training complete. Best validation loss: {best_valid_loss} at epoch {best_epoch}"
+            )
 
             # Save session parameters
-            #logger.save_session_param(epoch, avg_train_loss, valid_loss, valid_metrics)
+            # logger.save_session_param(epoch, avg_train_loss, valid_loss, valid_metrics)
             # Save session log (no epoch time)
             logger.save_session_param(
                 epoch,
@@ -842,9 +907,7 @@ class FedLearnHydro(DeepHydro):
             global_model.eval()
             if fl_hyperparam["fl_sample"] == "basin":
                 for c in range(self.num_users):
-                    one_user_cfg = self._get_a_user_cfgs(
-                        c
-                    )
+                    one_user_cfg = self._get_a_user_cfgs(c)
                     local_model = DeepHydro(
                         one_user_cfg,
                         pre_model=global_model,
@@ -852,12 +915,15 @@ class FedLearnHydro(DeepHydro):
                     preds, obss = local_model.model_evaluate()
                     all_preds.append(preds["streamflow"].values)
                     all_obss.append(obss["streamflow"].values)
+                    all_preds_np = np.concatenate(all_preds, axis=0)
+                    all_obss_np = np.concatenate(all_obss, axis=0)
+                    print(
+                        f"[DEBUG] all_preds shape: {all_preds_np.shape}, all_obss shape: {all_obss_np.shape}"
+                    )
             # If sampling by region, iterate over user_groups
             elif fl_hyperparam["fl_sample"] == "region":
                 for c in list(self.user_groups.keys()):
-                    one_user_cfg = self._get_a_user_cfgs(
-                        c
-                    )
+                    one_user_cfg = self._get_a_user_cfgs(c)
                     local_model = DeepHydro(
                         one_user_cfg,
                         pre_model=global_model,
@@ -901,6 +967,7 @@ class FedLearnHydro(DeepHydro):
         #     for key in state1:
         #         diff = state1[key] - state2[key].abs().sum()
         #         print(f"{key}: Difference {diff}")
+    
 
     def _get_a_user_cfgs(self, idx):
         """Get a user's configs for local training"""
