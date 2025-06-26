@@ -85,7 +85,7 @@ def default_config_file():
                 # the fraction of clients
                 "fl_frac": 0.1,
                 # fedprox mu
-                "fedprox_mu": 0.001,
+                "fedprox_mu": 0.0001,
             },
             "tl_hyperparam": {
                 # part of transfer learning in a model: a list of layers' names, such as ["lstm"]
@@ -1009,6 +1009,8 @@ def cmd(
     # To make pytest work in PyCharm, here we use the following code instead of "args = parser.parse_args()":
     # https://blog.csdn.net/u014742995/article/details/100119905
     args, unknown = parser.parse_known_args()
+    if fedprox_mu is not None:
+        args.fedprox_mu = fedprox_mu
     return args
 
 
